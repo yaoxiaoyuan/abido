@@ -89,7 +89,7 @@ class RolloutBuffer:
     def is_full(self):
         return self.step >= self.rollout_steps
 
-    def compute_returns_and_advantages(self, last_values, last_dones):
+    def compute_returns_and_advantages(self, last_values):
         """
         Compute discounted returns and GAE advantages in a single vectorized pass.
 
@@ -97,7 +97,6 @@ class RolloutBuffer:
 
         Args:
             last_values (np.ndarray): Bootstrap V(s_{T+1}), shape (n_envs,).
-            last_dones  (np.ndarray): Terminal flags for last step, shape (n_envs,).
         """
         # advantages shape: (n_envs, rollout_steps)
         advantages = np.zeros((self.n_envs, self.rollout_steps), dtype=np.float32)
@@ -105,16 +104,15 @@ class RolloutBuffer:
 
         for step in reversed(range(self.rollout_steps)):
             if step == self.rollout_steps - 1:
-                next_non_terminal = 1.0 - last_dones          # (n_envs,)
-                next_value        = last_values                # (n_envs,)
+                next_value = last_values                       # (n_envs,)
             else:
-                next_non_terminal = 1.0 - self.dones[:, step + 1]   # (n_envs,)
-                next_value        = self.values[:, step + 1]         # (n_envs,)
+                next_value = self.values[:, step + 1]          # (n_envs,)
 
+            non_terminal = 1.0 - self.dones[:, step]           # (n_envs,)
             delta    = (self.rewards[:, step]
-                        + self.gamma * next_value * next_non_terminal
+                        + self.gamma * next_value * non_terminal
                         - self.values[:, step])                # (n_envs,)
-            last_gae = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae
+            last_gae = delta + self.gamma * self.gae_lambda * non_terminal * last_gae
             advantages[:, step] = last_gae
 
         self.returns    = advantages + self.values   # (n_envs, rollout_steps)
@@ -397,13 +395,8 @@ class PPOAlgorithm(BaseAlgorithm):
 
         last_dones_np = np.array(dones, dtype=np.float32)            # (n_envs,)
         rollout_buffer.compute_returns_and_advantages(
-            last_values = last_values_np,
-            last_dones  = last_dones_np,
+            last_values = last_values_np
         )
-        # Also record scores for envs that did not finish this rollout
-        for env_idx in range(num_envs):
-            if not dones[env_idx]:
-                rollout_scores.append(float(vec_env.envs[env_idx].score))
 
         avg_reward = total_reward / (num_envs * rollout_buffer.rollout_steps)
         return states, dones, episodes_finished, avg_reward, rollout_scores
@@ -458,7 +451,8 @@ class PPOAlgorithm(BaseAlgorithm):
         episode_cnt = 0
         states      = env.reset_all()
         dones       = [False] * num_envs
-
+        recent_scores = []
+      
         for rollout_idx in range(1, args.n_rollouts + 1):
             states, dones, episodes_finished, avg_reward, rollout_scores = cls._collect_rollout_vec(
                 env, model, rollout_buffer, args,
@@ -467,7 +461,9 @@ class PPOAlgorithm(BaseAlgorithm):
             episode_cnt += episodes_finished
 
             cls.update_lr(optimizer, rollout_idx, args)
-            avg_score = sum(rollout_scores) / len(rollout_scores) if rollout_scores else 0.0
+            recent_scores += rollout_scores
+            avg_score = sum(recent_scores[-100:]) / len(recent_scores[-100:]) if recent_scores else 0.0
+
             log_msg = (
                 f"[rollout {rollout_idx}/{args.n_rollouts}] "
                 f"episodes_this_rollout: {episodes_finished}, "
