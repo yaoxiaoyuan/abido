@@ -304,7 +304,7 @@ class DQNAlgorithm(BaseAlgorithm):
         steps.  The target network is synced every ``target_update_frequency``
         steps.
         """
-        logger_path = os.path.join("logger", f"{args.task_name}.log")
+        logger_path = os.path.join("log", f"{args.task_name}.log")
         add_file_handlers(logger_path)
         print_formated_args(args)
         cls.set_seed(args.seed)
