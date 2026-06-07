@@ -298,7 +298,7 @@ class PPOAlgorithm(BaseAlgorithm):
 
     @classmethod
     def _collect_rollout_vec(cls, vec_env, model, rollout_buffer, args,
-                             states, dones):
+                             states, dones, episode_lengths):
         """
         Collect one rollout from ``num_envs`` parallel environments.
 
@@ -307,7 +307,7 @@ class PPOAlgorithm(BaseAlgorithm):
         buffer layout, enabling fully vectorized GAE computation afterwards.
         Bootstrap values are computed per-env for correctness.
 
-        Returns updated (states, dones, episodes_finished).
+        Returns updated (states, dones, episode_lengths, episodes_finished).
         """
         num_envs          = vec_env.num_envs
         episodes_finished = 0
@@ -356,6 +356,11 @@ class PPOAlgorithm(BaseAlgorithm):
             ]
 
             for env_idx, (next_state, reward, done) in enumerate(results):
+                episode_lengths[env_idx] += 1
+                if (args.max_episode_steps is not None
+                        and episode_lengths[env_idx] >= args.max_episode_steps):
+                    done = True
+
                 rewards_np[env_idx] = reward
                 dones_np[env_idx]   = float(done)
                 total_reward       += reward
@@ -365,6 +370,7 @@ class PPOAlgorithm(BaseAlgorithm):
                     rollout_scores.append(float(vec_env.envs[env_idx].score))
                     states[env_idx] = vec_env.envs[env_idx].reset()
                     dones[env_idx]  = False
+                    episode_lengths[env_idx] = 0
                 else:
                     states[env_idx] = next_state
                     dones[env_idx]  = done
@@ -399,7 +405,7 @@ class PPOAlgorithm(BaseAlgorithm):
         )
 
         avg_reward = total_reward / (num_envs * rollout_buffer.rollout_steps)
-        return states, dones, episodes_finished, avg_reward, rollout_scores
+        return states, dones, episode_lengths, episodes_finished, avg_reward, rollout_scores
 
     @staticmethod
     def _save_checkpoint(rollout_idx, model, args):
@@ -451,12 +457,13 @@ class PPOAlgorithm(BaseAlgorithm):
         episode_cnt = 0
         states      = env.reset_all()
         dones       = [False] * num_envs
+        episode_lengths = [0] * num_envs
         recent_scores = []
       
         for rollout_idx in range(1, args.n_rollouts + 1):
-            states, dones, episodes_finished, avg_reward, rollout_scores = cls._collect_rollout_vec(
+            states, dones, episode_lengths, episodes_finished, avg_reward, rollout_scores = cls._collect_rollout_vec(
                 env, model, rollout_buffer, args,
-                states, dones,
+                states, dones, episode_lengths,
             )
             episode_cnt += episodes_finished
 
@@ -531,6 +538,7 @@ class PPOAlgorithm(BaseAlgorithm):
         state       = env.reset()
         done        = False
         frame_count = 0
+        episode_length = 0
         action      = None
         running     = True
         env.render()
@@ -565,6 +573,9 @@ class PPOAlgorithm(BaseAlgorithm):
             if env.render_mode == "text" or frame_count >= args.fps // min(30, args.speed):
                 frame_count = 0
                 state, reward, done = env.step(action)
+                episode_length += 1
+                if args.max_episode_steps is not None and episode_length >= args.max_episode_steps:
+                    done = True
                 action = None
 
             env.render()
@@ -575,6 +586,7 @@ class PPOAlgorithm(BaseAlgorithm):
                 done  = False
                 env.render()
                 frame_count = 0
+                episode_length = 0
 
             if env.render_mode == "gui":
                 env.clock.tick(env.fps)

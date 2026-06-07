@@ -111,6 +111,10 @@ class BaseAlgorithm(ABC):
         # ── Checkpointing ─────────────────────────────────────────────────
         parser.add_argument("--print_every_game", type=int, default=100,
                             help="Print game stats every N completed games")
+        
+        parser.add_argument("--max_episode_steps", type=int, default=None,
+                            help="Maximum environment steps per episode. None disables the limit")
+        
         parser.add_argument("--seed", type=int, default=42,
                             help="Random seed for reproducibility (random / numpy / torch)")
 

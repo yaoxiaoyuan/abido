@@ -83,12 +83,13 @@ class GameBreakout(BaseGame):
         # grid_w = total columns = n_brick_cols × brick_width
         # grid_h = brick rows (n_brick_rows × brick_height) + open play area + paddle row
         self.grid_w = args.n_brick_cols * args.brick_width
-        self.grid_h = 4 * args.n_brick_rows * args.brick_height 
+        self.grid_h = 3 * args.n_brick_rows * args.brick_height 
 
-        # State: 3 channels × grid_h × grid_w (float32)
+        # State: 3 channels per frame × n_last_frames (frame stacking)
+        self.n_last_frames = args.n_last_frames
         self.state_info = [
             {
-                "shape": [3, self.grid_h, self.grid_w],
+                "shape": [3 * self.n_last_frames, self.grid_h, self.grid_w],
                 "dtype": "float",
             }
         ]
@@ -135,21 +136,29 @@ class GameBreakout(BaseGame):
     def update_state(self):
         new_state = self.create_new_state()
 
-        # Channel 0: bricks
+        # Shift previous frames forward: copy channels [3:] from old state
+        # into channels [:-3] of new state (drop the oldest 3-channel frame).
+        if self.n_last_frames > 1:
+            new_state[0][:-3] = self.state[0][3:]
+
+        # Write current observation into the last 3 channels.
+        base = 3 * (self.n_last_frames - 1)
+
+        # Channel base+0: bricks
         for row in range(self.n_brick_rows):
             for col in range(self.n_brick_cols):
                 if self.bricks[row][col]:
-                    new_state[0][0][row][col] = 1.0
+                    new_state[0][base][row][col] = 1.0
 
-        # Channel 1: ball
+        # Channel base+1: ball
         ball_row = int(np.clip(self.ball_y, 0, self.grid_h - 1))
         ball_col = int(np.clip(self.ball_x, 0, self.grid_w - 1))
-        new_state[0][1][ball_row][ball_col] = 1.0
+        new_state[0][base + 1][ball_row][ball_col] = 1.0
 
-        # Channel 2: paddle
+        # Channel base+2: paddle
         for col in range(self.paddle_x, self.paddle_x + self.paddle_grid_w):
             if 0 <= col < self.grid_w:
-                new_state[0][2][self.grid_h - 1][col] = 1.0
+                new_state[0][base + 2][self.grid_h - 1][col] = 1.0
 
         self.state = new_state
         return self.state
@@ -189,6 +198,8 @@ class GameBreakout(BaseGame):
         self.score = 0
         self.done  = False
 
+        self.step_reward = -0.005
+        self.brick_reward = 1.5
         self.state = self.create_new_state()
         self.update_state()
         return self.state
@@ -211,115 +222,153 @@ class GameBreakout(BaseGame):
 
     def _step_ball(self):
         """
-        Advance the ball by one step and resolve all collisions.
+        Advance the ball by one step and resolve collisions along its path.
 
-        Collision resolution order:
-          1. Left / right wall bounce.
-          2. Ceiling bounce.
-          3. Brick hit (vertical bounce; only the destination cell is checked).
-          4. Paddle hit or miss (checked before committing new_y).
+        The ball may move more than one grid cell per frame. Instead of only
+        checking the final position, split the movement into grid-sized substeps
+        and resolve the first wall, ceiling, brick, or paddle collision on the
+        actual path.
 
         Returns:
             reward (float): reward earned this step from brick hits.
             missed (bool) : True if the ball fell below the paddle row.
         """
-        step_reward       = -0.01
-        reward = step_reward
-        brick_reward = 1.0
+        reward = self.step_reward
+        self.step_reward = max(-0.015, self.step_reward - 0.0001)
 
-        paddle_row   = self.grid_h - 1
+        paddle_row = self.grid_h - 1
+        brick_width = self.args.brick_width
+        brick_height = self.args.brick_height
+        brick_zone_h = self.n_brick_rows * brick_height
+        brick_zone_w = self.n_brick_cols * brick_width
 
-        # Propose new position
-        new_x = self.ball_x + self.ball_dx
-        new_y = self.ball_y + self.ball_dy
+        def sign(value):
+            """Return -1, 0, or 1 for an integer velocity component."""
+            if value > 0:
+                return 1
+            if value < 0:
+                return -1
+            return 0
 
-        # ── Wall collisions (left / right) ───────────────────────────────
-        if new_x < 0 or new_x >= self.grid_w:
-            self.ball_dx = -self.ball_dx
-            new_x = self.ball_x + self.ball_dx
-
-        # ── Ceiling collision ────────────────────────────────────────────
-        if new_y < 0:
-            self.ball_dy = -self.ball_dy
-            new_y = self.ball_y + self.ball_dy
-
-        # ── Brick collision ──────────────────────────────────────────────
-        # Ball moves in grid coordinates; each brick occupies brick_width × brick_height
-        # grid cells. Convert grid position to brick index before lookup.
-        # Detect x-side and y-side collisions separately to correctly reflect dx or dy.
-        bw = self.args.brick_width
-        bh = self.args.brick_height
-        brick_zone_h = self.n_brick_rows * bh   # grid rows occupied by bricks
-        brick_zone_w = self.n_brick_cols * bw   # grid cols occupied by bricks
-
-        def brick_at(gy, gx):
-            """Return True if grid cell (gy, gx) is inside a live brick."""
-            if 0 <= gy < brick_zone_h and 0 <= gx < brick_zone_w:
-                return self.bricks[gy // bh][gx // bw]
+        def brick_at(grid_y, grid_x):
+            """Return True if grid cell (grid_y, grid_x) is inside a live brick."""
+            if 0 <= grid_y < brick_zone_h and 0 <= grid_x < brick_zone_w:
+                return self.bricks[grid_y // brick_height][grid_x // brick_width]
             return False
 
-        def destroy_brick(gy, gx):
-            """Destroy the brick at grid cell (gy, gx) and return reward."""
-            self.bricks[gy // bh][gx // bw] = False
+        def destroy_brick(grid_y, grid_x):
+            """Destroy the brick at grid cell (grid_y, grid_x) and return reward."""
+            row = grid_y // brick_height
+            col = grid_x // brick_width
+            if not self.bricks[row][col]:
+                return 0.0
+
+            self.bricks[row][col] = False
             self.score += 1
-            return brick_reward
+            max_row = max(self.n_brick_rows - 1, 1)
+            row_multiplier = 1.0 - 0.5 * (row / max_row)
+            self.step_reward = -0.005
+            self.brick_reward = min(self.brick_reward + 0.1, 3)
+            return self.brick_reward * row_multiplier
 
-        # Check x-side collision: ball moved horizontally into a brick
-        # (new_x entered a brick column but ball_y row was already clear).
-        hit_x = brick_at(self.ball_y, new_x)
-        # Check y-side collision: ball moved vertically into a brick
-        # (new_y entered a brick row but ball_x column was already clear).
-        hit_y = brick_at(new_y, self.ball_x)
-        # Check corner collision: both axes entered a brick simultaneously.
-        hit_corner = brick_at(new_y, new_x)
+        def resolve_paddle(grid_x, grid_y):
+            """Resolve paddle collision or miss if the path reaches paddle row."""
+            if grid_y < paddle_row:
+                return False, False, grid_x, grid_y
 
-        if hit_x:
-            reward += destroy_brick(self.ball_y, new_x)
-            self.ball_dx = -self.ball_dx
-            new_x = self.ball_x + self.ball_dx
-        if hit_y:
-            reward += destroy_brick(new_y, self.ball_x)
-            self.ball_dy = -self.ball_dy
-            new_y = self.ball_y + self.ball_dy
-        if hit_corner and not hit_x and not hit_y:
-            # Pure corner hit: reflect both axes
-            reward += destroy_brick(new_y, new_x)
-            self.ball_dx = -self.ball_dx
-            self.ball_dy = -self.ball_dy
-            new_x = self.ball_x + self.ball_dx
-            new_y = self.ball_y + self.ball_dy
+            clamped_x = int(np.clip(grid_x, 0, self.grid_w - 1))
+            if not self.paddle_x <= clamped_x < self.paddle_x + self.paddle_grid_w:
+                return True, True, clamped_x, paddle_row
 
-        # ── Paddle collision or miss ──────────────────────────────────────
-        # The ball reaches the paddle row (GRID_H-1) or overshoots it.
-        if new_y >= paddle_row:
-            clamped_x = int(np.clip(new_x, 0, self.grid_w - 1))
-            if self.paddle_x <= clamped_x < self.paddle_x + self.paddle_grid_w:
-                # Hit the paddle — bounce upward.
-                # Classic Breakout logic: ball_dx is determined purely by the
-                # hit position ratio on the paddle (left half → left, right half → right).
-                # This avoids the jitter caused by conditional direction correction.
-                # Divide paddle into 8 zones; each zone gives a different (dx, dy).
-                # Outer zones → steep angle (|dx|=2, dy=-1); inner zones → shallow (|dx|=1, dy=-2);
-                # centre zone → straight up (dx=0, dy=-2).
-                hit_ratio = (clamped_x - self.paddle_x) / self.paddle_grid_w  # 0.0 … 1.0
-                zone = min(int(hit_ratio * 8), 8)   # 0…4
-                dx_map = [-2, -2, -1, -1,  1, 1,  2, 2]
-                dy_map = [-1, -1, -2, -2,  -2, -2, -1, -1]
-                self.ball_dx = dx_map[zone]
-                self.ball_dy = dy_map[zone]
-                new_x = self.ball_x + self.ball_dx
-                new_y = self.ball_y + self.ball_dy
-                reward = reward - step_reward
-            else:
-                # Missed the paddle — let the ball fall to the bottom row before ending
-                self.ball_x = int(np.clip(new_x, 0, self.grid_w - 1))
-                self.ball_y = paddle_row
-                return reward, True
+            hit_ratio = (clamped_x - self.paddle_x) / self.paddle_grid_w
+            dx_map = [-2, -1, -1, -1, 0, 0, 1, 1, 1, 2]
+            dy_map = [-1, -2, -2, -2, -2, -2, -2, -2, -2, -1]
+            zone_count = len(dx_map)
+            zone = min(int(hit_ratio * zone_count), zone_count - 1)
+            self.ball_dx = dx_map[zone]
+            self.ball_dy = dy_map[zone]
+            self.brick_reward = 1.5
+            return True, False, clamped_x + self.ball_dx, paddle_row - 1
+        
+        current_x = self.ball_x
+        current_y = self.ball_y
+        movement_dx = self.ball_dx
+        movement_dy = self.ball_dy
+        abs_dx = abs(movement_dx)
+        abs_dy = abs(movement_dy)
+        path_steps = max(abs_dx, abs_dy, 1)
+        step_sign_x = sign(movement_dx)
+        step_sign_y = sign(movement_dy)
 
-        self.ball_x = int(np.clip(new_x, 0, self.grid_w - 1))
-        self.ball_y = int(np.clip(new_y, 0, self.grid_h - 1))
+        for step_index in range(path_steps):
+            previous_x_progress = (abs_dx * step_index) // path_steps
+            next_x_progress = (abs_dx * (step_index + 1)) // path_steps
+            previous_y_progress = (abs_dy * step_index) // path_steps
+            next_y_progress = (abs_dy * (step_index + 1)) // path_steps
+
+            delta_x = step_sign_x * (next_x_progress - previous_x_progress)
+            delta_y = step_sign_y * (next_y_progress - previous_y_progress)
+            next_x = current_x + delta_x
+            next_y = current_y + delta_y
+
+            if delta_x != 0:
+                if next_x < 0:
+                    next_x = -next_x
+                    self.ball_dx = -self.ball_dx
+                    step_sign_x = sign(self.ball_dx)
+                elif next_x >= self.grid_w:
+                    next_x = 2 * (self.grid_w - 1) - next_x
+                    self.ball_dx = -self.ball_dx
+                    step_sign_x = sign(self.ball_dx)
+
+            if delta_y != 0 and next_y < 0:
+                next_y = -next_y
+                self.ball_dy = -self.ball_dy
+                step_sign_y = sign(self.ball_dy)
+
+            hit_x = delta_x != 0 and brick_at(current_y, next_x)
+            hit_y = delta_y != 0 and brick_at(next_y, current_x)
+            hit_corner = delta_x != 0 and delta_y != 0 and brick_at(next_y, next_x)
+
+            if hit_x or hit_y or hit_corner:
+                if hit_x:
+                    reward += destroy_brick(current_y, next_x)
+                    self.ball_dx = -self.ball_dx
+                    next_x = current_x
+                if hit_y:
+                    reward += destroy_brick(next_y, current_x)
+                    self.ball_dy = -self.ball_dy
+                    next_y = current_y
+                if hit_corner and not hit_x and not hit_y:
+                    reward += destroy_brick(next_y, next_x)
+                    self.ball_dx = -self.ball_dx
+                    self.ball_dy = -self.ball_dy
+                    next_x = current_x
+                    next_y = current_y
+
+                current_x = int(np.clip(next_x, 0, self.grid_w - 1))
+                current_y = int(np.clip(next_y, 0, self.grid_h - 1))
+                break
+
+            reached_paddle, missed, current_x, current_y = resolve_paddle(next_x, next_y)
+            if reached_paddle:
+                if missed:
+                    self.ball_x = current_x
+                    self.ball_y = current_y
+                    return reward, True
+
+                reward = reward - self.step_reward
+                self.ball_x = int(np.clip(current_x, 0, self.grid_w - 1))
+                self.ball_y = int(np.clip(current_y, 0, self.grid_h - 1))
+                return reward, False
+
+            current_x = next_x
+            current_y = next_y
+
+        self.ball_x = int(np.clip(current_x, 0, self.grid_w - 1))
+        self.ball_y = int(np.clip(current_y, 0, self.grid_h - 1))
         return reward, False
-
+    
     def step(self, action):
         if action is None:
             return self.state, 0.0, False
@@ -483,7 +532,7 @@ class GameBreakout(BaseGame):
             ("Bricks Left", bricks_left),
         ]
         for index, (label, value) in enumerate(infos):
-            panel_y = 20 + index * 70
+            panel_y = 20 + index * 50
             pygame.draw.rect(
                 self.screen, PANEL_BG_COLOR,
                 (panel_x, panel_y, panel_w, 60),
@@ -503,19 +552,37 @@ class GameBreakout(BaseGame):
 # ─────────────────────────────────────────────
 
 def _build_conv_backbone(in_channels: int) -> nn.Sequential:
-    """Three-layer conv backbone shared by DQN and PPO."""
+    """Strided conv backbone for default 3×64×84 Breakout frames.
+
+    Spatial progression (default 64×84 input):
+        64×84  → conv1 (8×8, stride 4) → 16×21   RF =  8
+        16×21  → conv2 (4×4, stride 2) →  8×11   RF = 22
+         8×11  → conv3 (3×3, stride 2) →  4× 6   RF = 38
+         4× 6  → conv4 (3×3, stride 1) →  4× 6   RF = 54
+         4× 6  → conv5 (3×3, stride 1) →  4× 6   RF = 70
+         4× 6  → conv6 (3×3, stride 1) →  4× 6   RF = 86
+
+    Receptive field = 86×86, fully covers the 64×84 grid.
+    Output: [batch, 256, 4, 6] → pooled to [batch, 256, 4, 4] = 4096 features.
+    """
     return nn.Sequential(
-        nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+        nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, padding=2),
         nn.ReLU(inplace=True),
-        nn.Conv2d(32, 64, kernel_size=3, padding=1),
+        nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
         nn.ReLU(inplace=True),
-        nn.Conv2d(64, 128, kernel_size=3, padding=1),
+        nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
         nn.ReLU(inplace=True),
     )
 
-# Pool spatial dims to 4×4 then flatten → fixed 128*4*4 = 2048 features.
+# Pool remaining spatial dims to 4×4 then flatten → 64*4*4 = 1024 features.
 _POOL_SIZE    = 4
-_FEATURE_SIZE = 128 * _POOL_SIZE * _POOL_SIZE   # 2048
+_FEATURE_SIZE = 256 * _POOL_SIZE * _POOL_SIZE   # 4096
 
 # ─────────────────────────────────────────────
 # 3. DQN network
@@ -532,7 +599,7 @@ class BreakoutDQN(nn.Module):
     def __init__(self, args):
         super(BreakoutDQN, self).__init__()
         n_actions   = 3
-        in_channels = 3   # brick / ball / paddle channels
+        in_channels = 3 * args.n_last_frames   # brick / ball / paddle channels
 
         self.conv_layers = _build_conv_backbone(in_channels)
         self.pool        = nn.AdaptiveAvgPool2d((_POOL_SIZE, _POOL_SIZE))
@@ -576,7 +643,7 @@ class BreakoutPPO(nn.Module):
     def __init__(self, args):
         super(BreakoutPPO, self).__init__()
         n_actions   = 3
-        in_channels = 3
+        in_channels = 3 * args.n_last_frames
 
         self.conv_layers = _build_conv_backbone(in_channels)
         self.pool        = nn.AdaptiveAvgPool2d((_POOL_SIZE, _POOL_SIZE))
@@ -605,13 +672,13 @@ def add_custom_argument(parser):
         "--ball_size",
         type=int,
         default=10,
-        help="pixels per grid cell (ball size as base unit); controls overall scale (default: 30)",
+        help="pixels per grid cell (ball size as base unit); controls overall scale (default: 10)",
     )
     parser.add_argument(
         "--paddle_width",
         type=int,
-        default=8,
-        help="paddle width as multiples of ball_size in pixels (default: 8)",
+        default=10,
+        help="paddle width as multiples of ball_size in pixels (default: 10)",
     )
     parser.add_argument(
         "--brick_width",
@@ -628,14 +695,14 @@ def add_custom_argument(parser):
     parser.add_argument(
         "--n_brick_rows",
         type=int,
-        default=8,
-        help="number of brick rows (default: 8)",
+        default=5,
+        help="number of brick rows (default: 5)",
     )
     parser.add_argument(
         "--n_brick_cols",
         type=int,
-        default=14,
-        help="number of brick columns (default: 14)",
+        default=10,
+        help="number of brick columns (default: 10)",
     )
     parser.add_argument(
         "--normalize_reward",

@@ -342,11 +342,14 @@ class DQNAlgorithm(BaseAlgorithm):
                 action        = cls.select_action(q_values, env.n_actions, eps)
 
                 next_state, reward, done = env.step(action)
+                episode_length += 1
+                if args.max_episode_steps is not None and episode_length >= args.max_episode_steps:
+                    done = True
+                
                 replay_buffer.store(state, action, reward, next_state, done)
 
                 state          = next_state
                 episode_reward += reward
-                episode_length += 1
 
                 if len(replay_buffer) < args.min_train_buffer_size:
                     continue
@@ -412,6 +415,7 @@ class DQNAlgorithm(BaseAlgorithm):
         state       = env.reset()
         done        = False
         frame_count = 0
+        episode_length = 0
         action      = None
         env.render()
 
@@ -441,6 +445,9 @@ class DQNAlgorithm(BaseAlgorithm):
             if env.render_mode == "text" or frame_count >= args.fps // min(30, args.speed):
                 frame_count = 0
                 state, reward, done = env.step(action)
+                episode_length += 1
+                if args.max_episode_steps is not None and episode_length >= args.max_episode_steps:
+                    done = True
                 action = None
 
             env.render()
@@ -451,6 +458,8 @@ class DQNAlgorithm(BaseAlgorithm):
                 done  = False
                 env.render()
                 frame_count = 0
+                episode_length = 0
 
             if env.render_mode == "gui":
                 env.clock.tick(env.fps)
+
