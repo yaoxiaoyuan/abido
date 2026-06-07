@@ -20,7 +20,7 @@ import os
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logger")
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 _LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
