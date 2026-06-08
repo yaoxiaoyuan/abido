@@ -87,56 +87,47 @@ class PACEDataset(Dataset):
     def __init__(
         self,
         data_path: str,
+        vocab_path: str,
         max_records: int = 50000,
         max_ctx_size: int = 4,
         min_ctx_size: int = 2,
-        min_count: int = 5,
         use_cls: bool = False,
-        vocab_path: str = "",
-        positive_window: int = 2,
+        positive_window: int = -1,
     ):
         """
         Args:
             data_path: path to a jsonl file; each line must be a JSON object with a
                 ``"content"`` key whose value is a list of token strings.
+            vocab_path: path to a JSON file containing a list of word strings
+                        (no special tokens).  The vocabulary is built directly from
+                        that list in order.
             max_records: maximum number of lines to read from *data_path*.
             max_ctx_size: maximum number of tokens per sample chunk.
             min_ctx_size: minimum number of tokens per sample; shorter chunks are discarded.
-            min_count: words with frequency below this threshold are replaced with '<unk>'.
-                       Only used when *vocab_path* is not provided.
             use_cls: if True, prepend a '<cls>' token at position 0 of every training chunk;
                      the cls representation can be used as a sequence-level feature for
                      classification.  When enabled, effective content length per chunk is
                      max_ctx_size - 1.
-            vocab_path: optional path to a JSON file containing a list of word strings
-                        (no special tokens).  When provided the vocabulary is built
-                        directly from that list in order, skipping frequency counting.
-                        When omitted, the vocabulary is derived from the training data
-                        using *min_count*.
-            positive_window: maximum offset for contrastive positive pair sampling;
-                        for each segment, segments within ±positive_window positions in
-                        the same document are considered positive candidates.
+            positive_window: controls contrastive learning mode.
+                        -1 = disabled (no contrastive loss).
+                        >1 = enabled; documents shorter than 3 * min_ctx_size tokens
+                        are skipped (not enough content for both positive and negative
+                        chunks).
         """
         self.max_ctx_size = max_ctx_size
         self.min_ctx_size = min_ctx_size
         self.use_cls = use_cls
         self.positive_window = positive_window
 
-        # ── Load texts from disk ──────────────────────────────────────────────
-        tokenized_texts = []
-        with open(data_path, encoding="utf-8") as data_file:
-            for i, line in enumerate(data_file):
-                tokenized_texts.append(json.loads(line)["content"])
-                if i % 10000 == 0:
-                    print(f"Loaded {i + 1} records")
-                if i >= max_records - 1:
-                    break
-        print(f"Total records loaded: {len(tokenized_texts)}")
+        content_size = self.max_ctx_size - 1 if self.use_cls else self.max_ctx_size
+        min_size = self.min_ctx_size - 1 if self.use_cls else self.min_ctx_size
+        self._content_size = content_size
 
-        # ── Build vocabulary ──────────────────────────────────────────────────
-        # Special tokens always occupy the first five fixed indices; '<cls>' is
-        # always registered (index 4) so downstream classifiers can reference it
-        # even when use_cls=False.
+        # When contrastive learning is active, docs must be long enough to
+        # produce both positive and negative chunks (at least 3 * min_ctx_size).
+        min_doc_len = 3 * min_size if positive_window > 1 else min_size
+
+        # ── Build vocabulary from pre-built word list ─────────────────────────
         self.vocab = {
             SPECIAL_TOKEN_UNK: SPECIAL_TOKEN_ID_UNK,
             SPECIAL_TOKEN_BOS: SPECIAL_TOKEN_ID_BOS,
@@ -145,160 +136,100 @@ class PACEDataset(Dataset):
             SPECIAL_TOKEN_CLS: SPECIAL_TOKEN_ID_CLS,
         }
 
-        if vocab_path:
-            # Pre-built vocab: read an ordered word list and assign indices in order.
-            with open(vocab_path, encoding="utf-8") as vocab_file:
-                word_list = json.load(vocab_file)
-            for word in word_list:
-                if word not in self.vocab:
-                    self.vocab[word] = len(self.vocab)
-            print(f"Vocab loaded from '{vocab_path}': {len(self.vocab)} entries (incl. special tokens)")
-        else:
-            # Derive vocab by counting word frequencies in the training data.
-            all_words = [word for words in tokenized_texts for word in words]
-            word_counts = Counter(all_words)
-            for word, count in word_counts.items():
-                if count >= min_count:
-                    self.vocab[word] = len(self.vocab)
-            print(f"Vocab built from data: {len(self.vocab)} entries (incl. special tokens)")
+        with open(vocab_path, encoding="utf-8") as vocab_file:
+            word_list = json.load(vocab_file)
+        for word in word_list:
+            if word not in self.vocab:
+                self.vocab[word] = len(self.vocab)
+        print(f"Vocab loaded from '{vocab_path}': {len(self.vocab)} entries (incl. special tokens)")
 
         self.cls_token_id = SPECIAL_TOKEN_ID_CLS
         self.idx2word = {idx: word for word, idx in self.vocab.items()}
         self.vocab_size = len(self.vocab)
 
-        # Replace low-frequency words with '<unk>' while counting unk rate in a single pass
+        # ── Load texts, convert to int arrays, and build sample index ─────────
         unk_id = SPECIAL_TOKEN_ID_UNK
         n_total_words = 0
         n_unk_words = 0
-        # Store texts as int arrays (numpy) for fast downstream chunking
+        n_skipped_docs = 0
         self.tokenized_texts = []
-        for words in tokenized_texts:
-            n_total_words += len(words)
-            indices = np.empty(len(words), dtype=np.int32)
-            for i, word in enumerate(words):
-                idx = self.vocab.get(word, unk_id)
-                indices[i] = idx
-                if idx == unk_id and word != SPECIAL_TOKEN_UNK:
-                    n_unk_words += 1
-            self.tokenized_texts.append(indices)
+        index_list = []
+
+        with open(data_path, encoding="utf-8") as data_file:
+            for i, line in enumerate(data_file):
+                words = json.loads(line)["content"]
+                n_total_words += len(words)
+                indices = np.array([self.vocab.get(w, unk_id) for w in words], dtype=np.int32)
+                unk_mask = indices == unk_id
+                n_unk_words += int(unk_mask.sum()) - words.count(SPECIAL_TOKEN_UNK)
+
+                # Skip docs that are too short
+                if len(indices) < min_doc_len:
+                    n_skipped_docs += 1
+                else:
+                    doc_id = len(self.tokenized_texts)
+                    self.tokenized_texts.append(indices)
+                    # Build chunk index for this doc
+                    for start in range(0, len(indices), content_size):
+                        chunk_len = min(content_size, len(indices) - start)
+                        if chunk_len >= min_size:
+                            index_list.append((doc_id, start))
+
+                if i % 10000 == 0:
+                    print(f"Loaded {i + 1} records")
+                if i >= max_records - 1:
+                    break
+
+        self.sample_index = np.array(index_list, dtype=np.int32)  # [N, 2]
 
         unk_rate = n_unk_words / n_total_words if n_total_words else 0.0
-        print(f"{n_unk_words} out of {n_total_words} words replaced with '<unk>', {unk_rate:.2%}")
-
-        # Generate training samples. Each sample has a global segment id.
-        # doc_ids[i] = doc id of segment i (numpy int32 array)
-        # positive_candidates[i] = global ids of positive partners, padded with -1 (numpy int32 2D)
-        self.data, self.doc_ids, self.positive_candidates = self._generate_training_data()
-
-    def _generate_training_data(self):
-        """Generate training chunks and pre-compute positive candidates for contrastive learning.
-
-        Pre-allocates numpy arrays based on estimated maximum segment count to avoid
-        repeated list resizing and small-object allocation overhead.
-
-        Returns:
-            data:                list of numpy arrays (token-index chunks)
-            doc_ids:             numpy int32 array of shape [N], doc_ids[i] = document id of segment i
-            positive_candidates: numpy int32 array of shape [N, 2*window], padded with -1;
-                                 positive_candidates[i] contains global segment ids that are
-                                 valid positive partners (entries == -1 are invalid padding)
-        """
-        content_size = self.max_ctx_size - 1 if self.use_cls else self.max_ctx_size
-        min_size = self.min_ctx_size - 1 if self.use_cls else self.min_ctx_size
-        cls_id = self.cls_token_id
-        use_cls = self.use_cls
-        window = self.positive_window
-        max_ctx = self.max_ctx_size
-
-        # Pre-estimate max segment count: each doc produces at most ceil(len/content_size) segments
-        max_segments = sum(
-            len(indices) // content_size + 1 for indices in self.tokenized_texts
-        )
-
-        # Pre-allocate: data buffer (N x max_ctx) filled with pad_id, doc_ids (N,), positive_candidates (N x 2*window)
-        pad_id = SPECIAL_TOKEN_ID_PAD
-        data_buf = np.full((max_segments, max_ctx), pad_id, dtype=np.int32)
-        doc_ids_buf = np.empty(max_segments, dtype=np.int32)
-        max_pos_width = 2 * window
-        pos_cand_buf = np.full((max_segments, max_pos_width), -1, dtype=np.int32)
-
-        seg_count = 0  # actual number of valid segments produced
-
-        for doc_id, indices in enumerate(self.tokenized_texts):
-            n = len(indices)
-            if n < min_size:
-                continue
-            doc_start_id = seg_count
-            starts = np.arange(0, n, content_size)
-            for start in starts:
-                end = min(start + content_size, n)
-                chunk_len = end - start
-                if chunk_len < min_size:
-                    continue
-                if use_cls:
-                    actual_len = chunk_len + 1
-                    data_buf[seg_count, 0] = cls_id
-                    data_buf[seg_count, 1:actual_len] = indices[start:end]
-                else:
-                    actual_len = chunk_len
-                    data_buf[seg_count, :actual_len] = indices[start:end]
-
-                doc_ids_buf[seg_count] = doc_id
-                seg_count += 1
-
-            # Backfill positive_candidates for this doc's segments
-            num_segs = seg_count - doc_start_id
-            for local_idx in range(num_segs):
-                global_id = doc_start_id + local_idx
-                low = max(0, local_idx - window)
-                high = min(num_segs - 1, local_idx + window)
-                col = 0
-                for j in range(low, high + 1):
-                    if j != local_idx:
-                        pos_cand_buf[global_id, col] = doc_start_id + j
-                        col += 1
-
-        # Trim to actual segment count (data_buf is already pad-filled for short chunks)
-        data = data_buf[:seg_count]  # [N, max_ctx], padded with pad_id
-        doc_ids = doc_ids_buf[:seg_count]
-        positive_candidates = pos_cand_buf[:seg_count]
-
-        return data, doc_ids, positive_candidates
+        print(f"Total records loaded: {len(self.tokenized_texts)} docs, "
+              f"{n_skipped_docs} skipped (too short), "
+              f"{len(self.sample_index)} samples indexed")
+        print(f"{n_unk_words}/{n_total_words} words replaced with '<unk>' ({unk_rate:.2%})")
 
     def __len__(self):
-        return len(self.data)
+        return len(self.sample_index)
 
     def __getitem__(self, idx):
-        """Return fixed-length word-index sequence and document identity.
+        """Materialise a fixed-length chunk on-the-fly from the sample index.
 
         Returns:
             token_ids: tensor of shape [max_ctx_size], padded with SPECIAL_TOKEN_ID_PAD
             doc_id:    integer document id this segment belongs to
         """
-        return torch.from_numpy(self.data[idx].astype(np.int64)), int(self.doc_ids[idx])
+        doc_id, start = int(self.sample_index[idx, 0]), int(self.sample_index[idx, 1])
+        indices = self.tokenized_texts[doc_id]
+        end = min(start + self._content_size, len(indices))
+
+        chunk = np.full(self.max_ctx_size, SPECIAL_TOKEN_ID_PAD, dtype=np.int64)
+        if self.use_cls:
+            chunk[0] = self.cls_token_id
+            chunk[1:1 + end - start] = indices[start:end]
+        else:
+            chunk[:end - start] = indices[start:end]
+
+        return torch.from_numpy(chunk), doc_id
 
 
 class PACEContrastiveBatchSampler:
     """Batch sampler that ensures each batch contains positive pairs for contrastive learning.
 
-    Strategy: iterate through all samples sequentially (so every sample is trained exactly
-    once per epoch). For each anchor sample, its adjacent segment from the same document
-    (positive partner) is injected into the same batch. Duplicates are avoided — if the
-    positive partner already appears as an anchor in this batch, no extra copy is added.
+    Strategy: iterate through all samples sequentially (full coverage per epoch).
+    For each anchor, a random positive chunk from the same document (within
+    ±positive_window of the anchor's chunk position) is sampled on-the-fly and
+    injected into the batch. Negatives arise naturally from cross-document samples.
 
-    Each batch yields indices of size up to `batch_size`. Approximately half the slots
-    are "anchors" (sequential traversal guarantees full coverage) and the other half are
-    their positive partners (adjacent segments from the same document). This guarantees
-    positive pairs co-occur in a batch while negatives (cross-document) are naturally
-    abundant.
+    Positive chunks are generated directly from the document's token array using a
+    random start offset within the window, so no pre-computed candidate table is needed.
     """
 
     def __init__(self, dataset: 'PACEDataset', batch_size: int, shuffle_docs: bool = True):
         """
         Args:
-            dataset:      PACEDataset instance with positive_candidates pre-computed
+            dataset:      PACEDataset instance
             batch_size:   desired batch size (actual may be smaller for the last batch)
-            shuffle_docs: if True, shuffle sample order each epoch at segment level
+            shuffle_docs: if True, shuffle sample order each epoch
         """
         self.dataset = dataset
         self.batch_size = batch_size
@@ -306,30 +237,23 @@ class PACEContrastiveBatchSampler:
         self.num_samples = len(dataset)
 
     def __iter__(self):
-        # Build sequential order over all samples; optionally shuffle at doc level
+        all_indices = np.arange(self.num_samples)
         if self.shuffle_docs:
-            all_indices = list(range(self.num_samples))
             np.random.shuffle(all_indices)
-        else:
-            all_indices = list(range(self.num_samples))
 
-        # Number of anchor slots per batch: reserve ~half for positive partners
-        anchors_per_batch = self.batch_size // 2
-        if anchors_per_batch < 1:
-            anchors_per_batch = 1
-
+        anchors_per_batch = max(self.batch_size // 2, 1)
         position = 0
+
         while position < len(all_indices):
-            # Collect anchors for this batch
             anchor_end = min(position + anchors_per_batch, len(all_indices))
             batch_set = set()
             batch = []
             for i in range(position, anchor_end):
-                idx = all_indices[i]
+                idx = int(all_indices[i])
                 batch.append(idx)
                 batch_set.add(idx)
 
-            # Collect positive partners for each anchor (skip duplicates already in batch)
+            # Inject one random positive (same-doc) partner per anchor
             positives = []
             for idx in list(batch):
                 pos_idx = self._find_positive(idx)
@@ -337,7 +261,6 @@ class PACEContrastiveBatchSampler:
                     positives.append(pos_idx)
                     batch_set.add(pos_idx)
 
-            # Fill up to batch_size with positives
             remaining_slots = self.batch_size - len(batch)
             batch.extend(positives[:remaining_slots])
 
@@ -345,25 +268,45 @@ class PACEContrastiveBatchSampler:
             position = anchor_end
 
     def _find_positive(self, idx):
-        """Pick a random positive partner from pre-computed candidates.
+        """Pick a random different chunk from the same document.
 
-        Uses dataset.positive_candidates[idx] which is a numpy row of global segment ids
-        padded with -1. Picks one valid (non -1) entry at random.
-        Returns None if no valid candidates exist.
+        Looks up the doc_id for *idx*, computes all valid chunk start positions
+        for that document, and picks a random one that differs from the anchor.
+        Returns None if the document has only one valid chunk.
         """
-        row = self.dataset.positive_candidates[idx]
-        # Valid candidates are those != -1
-        valid_mask = row >= 0
-        num_valid = valid_mask.sum()
-        if num_valid == 0:
+        doc_id = int(self.dataset.sample_index[idx, 0])
+        anchor_start = int(self.dataset.sample_index[idx, 1])
+        doc_tokens = self.dataset.tokenized_texts[doc_id]
+        content_size = self.dataset._content_size
+        min_size = self.dataset.min_ctx_size - 1 if self.dataset.use_cls else self.dataset.min_ctx_size
+
+        # Enumerate all valid chunk starts for this doc
+        valid_starts = []
+        for start in range(0, len(doc_tokens), content_size):
+            chunk_len = min(content_size, len(doc_tokens) - start)
+            if chunk_len >= min_size and start != anchor_start:
+                valid_starts.append(start)
+
+        if not valid_starts:
             return None
-        valid_indices = row[valid_mask]
-        return int(valid_indices[np.random.randint(num_valid)])
+
+        # Pick a random sibling start, then find its global sample index
+        chosen_start = valid_starts[np.random.randint(len(valid_starts))]
+
+        # Binary-search-like lookup: sample_index is sorted by (doc_id, start)
+        # within each doc, so scan the neighbourhood of idx
+        sample_index = self.dataset.sample_index
+        for offset in range(len(sample_index)):
+            for candidate in (idx + offset, idx - offset):
+                if 0 <= candidate < len(sample_index):
+                    if (int(sample_index[candidate, 0]) == doc_id and
+                            int(sample_index[candidate, 1]) == chosen_start):
+                        return candidate
+        return None
 
     def __len__(self):
         anchors_per_batch = max(self.batch_size // 2, 1)
         return (self.num_samples + anchors_per_batch - 1) // anchors_per_batch
-
 
 def pace_collate_fn(batch):
     """Collate fixed-length context sequences into batched tensors.
@@ -1386,9 +1329,12 @@ def parse_args():
                         help='if set, prepend a <cls> token at position 0 of every training chunk')
 
     # ── Dataset chunking ─────────────────────────────────────────────────────
+    # ── Dataset chunking ─────────────────────────────────────────────────────
     parser.add_argument('--max_ctx_size', type=int, default=20)
     parser.add_argument('--min_ctx_size', type=int, default=20)
-    parser.add_argument('--min_count', type=int, default=200)
+    parser.add_argument('--positive_window', type=int, default=-1,
+                        help='contrastive learning window size; -1 = disabled, '
+                             '>1 = enabled (docs shorter than 3*min_ctx_size are skipped)')
 
     # ── Training hyperparameters ──────────────────────────────────────────────
     parser.add_argument('--epochs', type=int, default=1)
@@ -1450,9 +1396,9 @@ def train(args):
         max_records=args.max_records,
         max_ctx_size=args.max_ctx_size,
         min_ctx_size=args.min_ctx_size,
-        min_count=args.min_count,
         use_cls=args.use_cls,
         vocab_path=args.vocab_path,
+        positive_window=args.positive_window
     )
     print(f'Vocabulary size: {dataset.vocab_size}')
     print(f'Training samples: {len(dataset)}')

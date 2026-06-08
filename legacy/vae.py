@@ -727,7 +727,7 @@ def calc_mi(vae: VAE, data_loader: DataLoader) -> float:
     return total_mi / num_sents
 
 
-def build_logger(log_dir: str = "../logger") -> logging.Logger:
+def build_logger(log_dir: str = "log") -> logging.Logger:
     """
     Build a logger that writes to both a timestamped file and stdout.
 
