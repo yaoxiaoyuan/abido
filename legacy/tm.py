@@ -11,8 +11,6 @@ Supports demo data, corpus files, external vocabulary, and JSON/NumPy outputs.
 
 import argparse
 import json
-import re
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -25,35 +23,6 @@ class Vocabulary:
         self.word2id = word2id or {}
         self.vocab = [w for w, _ in sorted(self.word2id.items(), key=lambda x: x[1])]
         self.V = len(self.vocab)
-
-    @classmethod
-    def build(cls, documents, min_freq=1, max_vocab=None, stopwords=None):
-        """
-        Build vocabulary from tokenized documents.
-
-        Parameters
-        ----------
-        documents : list of list of str
-        min_freq : int
-            Discard words appearing fewer than this many times.
-        max_vocab : int or None
-            Keep only the top-N most frequent words.
-        stopwords : set or None
-            Words to exclude.
-        """
-        stopwords = stopwords or set()
-        freq = Counter(w for doc in documents for w in doc)
-
-        words = [
-            w for w, c in freq.most_common()
-            if c >= min_freq and w not in stopwords
-        ]
-        if max_vocab is not None:
-            words = words[:max_vocab]
-        words.sort()
-
-        word2id = {w: i for i, w in enumerate(words)}
-        return cls(word2id)
 
     @classmethod
     def load(cls, path):
@@ -91,62 +60,59 @@ class Vocabulary:
 
 # ── Document I/O ────────────────────────────────────────────────────
 
-def read_corpus(path, tokenizer=None):
+def read_corpus(path, vocab):
     """
-    Read a text corpus from a file.
+    Read a tokenized corpus from a JSONL file and convert to word IDs.
 
-    Supported formats:
-      - .txt:  one document per line, whitespace-separated tokens
-      - .jsonl: one JSON object per line, expects "text" or "tokens" field
+    Each line must be a JSON object. The document tokens are read from the
+    first available key among ``"tokens"``, ``"text"``, ``"content"``.
+    The value must be a list of str (pre-tokenized).
+
     Parameters
     ----------
     path : str
-        Path to corpus file.
-    tokenizer : callable or None
-        Function str → list[str]. If None, splits on whitespace.
+        Path to a ``.jsonl`` file.
+    vocab : Vocabulary
+        Vocabulary used to convert tokens to IDs.
 
     Returns
     -------
-    list of list of str
+    list of list of int
     """
-    if tokenizer is None:
-        tokenizer = lambda s: re.findall(r"[a-z0-9]+", s.lower())
-
+    word2id = vocab.word2id
     documents = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-
-            if path.endswith(".jsonl"):
-                obj = json.loads(line)
-                text = obj.get("tokens") or obj.get("text", "")
-                if isinstance(text, list):
-                    documents.append(text)
-                else:
-                    documents.append(tokenizer(text))
-            else:
-                documents.append(tokenizer(line))
-
+            obj = json.loads(line)
+            tokens = obj.get("tokens") or obj.get("text") or obj.get("content") or []
+            documents.append([word2id[w] for w in tokens if w in word2id])
     return documents
 
 
-def read_labeled_corpus(path, tokenizer=None):
+def read_labeled_corpus(path, vocab):
     """
-    Read a labeled corpus from a JSONL file.
+    Read a labeled corpus from a JSONL file and convert to word IDs.
 
-    Each line: {"text": "...", "labels": ["label1", "label2"]}
-    Or:        {"tokens": [...], "labels": [...]}
+    Each line must be a JSON object with a ``"labels"`` field (list of str)
+    and document tokens in the first available key among ``"tokens"``,
+    ``"text"``, ``"content"`` (must be a list of str).
+
+    Parameters
+    ----------
+    path : str
+        Path to a ``.jsonl`` file.
+    vocab : Vocabulary
+        Vocabulary used to convert tokens to IDs.
 
     Returns
     -------
-    documents : list of list of str
+    documents : list of list of int
     labels : list of list of str
     """
-    if tokenizer is None:
-        tokenizer = lambda s: re.findall(r"[a-z0-9]+", s.lower())
-
+    word2id = vocab.word2id
     documents, labels = [], []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -154,13 +120,9 @@ def read_labeled_corpus(path, tokenizer=None):
             if not line:
                 continue
             obj = json.loads(line)
-            text = obj.get("tokens") or obj.get("text", "")
-            if isinstance(text, list):
-                documents.append(text)
-            else:
-                documents.append(tokenizer(text))
+            tokens = obj.get("tokens") or obj.get("text") or obj.get("content") or []
+            documents.append([word2id[w] for w in tokens if w in word2id])
             labels.append(obj.get("labels", []))
-
     return documents, labels
 
 
@@ -195,6 +157,7 @@ DEMO_LABEL_WORDS = {
     "science": ["research", "experiment", "hypothesis", "theory", "paper",
                 "lab", "method", "result", "study", "evidence"],
 }
+
 
 def make_demo_corpus(n_docs=200, doc_len=40, noise=0.15, seed=0):
     """Synthetic 3-topic corpus (ml / bio / astro)."""
@@ -251,19 +214,18 @@ class LDA:
         self.beta = beta
         self.rng = np.random.RandomState(random_state)
 
-    def fit(self, documents, vocab=None, n_iter=500, verbose=True, log_every=50):
+    def fit(self, documents, vocab, n_iter=500, verbose=True, log_every=50):
         """
         Parameters
         ----------
-        documents : list of list of str
-        vocab : Vocabulary or None
-            If None, build vocabulary from documents.
+        documents : list of list of int
+            Token-id sequences (already converted via vocab).
+        vocab : Vocabulary
+            Pre-loaded vocabulary.
         """
-        if vocab is None:
-            vocab = Vocabulary.build(documents)
         self.vocab = vocab
         self.V = vocab.V
-        self.docs = vocab.docs2ids(documents)
+        self.docs = documents
         self.D = len(self.docs)
 
         self._initialize()
@@ -296,7 +258,6 @@ class LDA:
     def _gibbs_sweep(self):
         K, V = self.K, self.V
         alpha, beta = self.alpha, self.beta
-
         beta_V = beta * V
 
         for d, doc in enumerate(self.docs):
@@ -345,6 +306,71 @@ class LDA:
     def transform(self):
         return self.theta
 
+    def save(self, path):
+        """Save trained model to a directory."""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "phi.npy", self.phi)
+        self.vocab.save(path / "vocab.json")
+        with open(path / "config.json", "w") as f:
+            json.dump({"model": "lda", "K": self.K,
+                        "alpha": self.alpha, "beta": self.beta}, f)
+
+    @classmethod
+    def load(cls, path):
+        """Load a trained model from a directory. Returns (model, vocab)."""
+        path = Path(path)
+        with open(path / "config.json") as f:
+            config = json.load(f)
+        vocab = Vocabulary.load(path / "vocab.json")
+        model = cls(n_topics=config["K"], alpha=config["alpha"], beta=config["beta"])
+        model.phi = np.load(path / "phi.npy")
+        model.vocab = vocab
+        model.V = vocab.V
+        model.K = config["K"]
+        return model, vocab
+
+    def predict(self, documents, n_iter=50):
+        """Infer topic distributions for new documents using learned phi.
+
+        Parameters
+        ----------
+        documents : list of list of int
+            Token-id sequences.
+        n_iter : int
+            Number of Gibbs sweeps for inference.
+
+        Returns
+        -------
+        theta : np.ndarray, shape [n_docs, K]
+        """
+        K, V = self.K, self.V
+        alpha, beta = self.alpha, self.beta
+        phi = self.phi
+        rng = np.random.RandomState(42)
+
+        n_dk = np.zeros((len(documents), K), dtype=np.int32)
+        all_z = []
+        for d, doc in enumerate(documents):
+            z_doc = rng.randint(0, K, size=len(doc))
+            all_z.append(z_doc)
+            for i, w in enumerate(doc):
+                n_dk[d, z_doc[i]] += 1
+
+        for _ in range(n_iter):
+            for d, doc in enumerate(documents):
+                for i, w in enumerate(doc):
+                    k_old = all_z[d][i]
+                    n_dk[d, k_old] -= 1
+                    p = (n_dk[d] + alpha) * phi[:, w]
+                    p /= p.sum()
+                    k_new = rng.choice(K, p=p)
+                    all_z[d][i] = k_new
+                    n_dk[d, k_new] += 1
+
+        theta = (n_dk + alpha) / (n_dk.sum(axis=1, keepdims=True) + K * alpha)
+        return theta
+
 
 class LabeledLDA:
 
@@ -362,21 +388,20 @@ class LabeledLDA:
         self.label_prior_strength = label_prior_strength
         self.rng = np.random.RandomState(random_state)
 
-    def fit(self, documents, labels, vocab=None, n_iter=500, verbose=True, log_every=50):
+    def fit(self, documents, labels, vocab, n_iter=500, verbose=True, log_every=50):
         """
         Parameters
         ----------
-        documents : list of list of str
+        documents : list of list of int
+            Token-id sequences (already converted via vocab).
         labels : list of list of str
             Each document's label set.
-        vocab : Vocabulary or None
-            If None, build vocabulary from documents.
+        vocab : Vocabulary
+            Pre-loaded vocabulary.
         """
-        if vocab is None:
-            vocab = Vocabulary.build(documents)
         self.vocab = vocab
         self.V = vocab.V
-        self.docs = vocab.docs2ids(documents)
+        self.docs = documents
         self.D = len(self.docs)
 
         self._build_label_map(labels)
@@ -504,16 +529,125 @@ class LabeledLDA:
         for label, words in self.top_words(n).items():
             print(f"  {label:>15s}: {', '.join(words)}")
 
-    def predict(self):
-        return self.theta
+    def save(self, path):
+        """Save trained model to a directory."""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "phi.npy", self.phi)
+        self.vocab.save(path / "vocab.json")
+        with open(path / "config.json", "w") as f:
+            json.dump({"model": "labeled_lda", "K": self.K,
+                        "alpha": self.alpha, "beta": self.beta,
+                        "label_prior_strength": self.label_prior_strength,
+                        "label_names": self.label_names,
+                        "label2id": self.label2id}, f, ensure_ascii=False)
 
-    def predict_labels(self, threshold=0.1):
+    @classmethod
+    def load(cls, path):
+        """Load a trained model from a directory. Returns (model, vocab)."""
+        path = Path(path)
+        with open(path / "config.json") as f:
+            config = json.load(f)
+        vocab = Vocabulary.load(path / "vocab.json")
+        model = cls(n_topics=config["K"], alpha=config["alpha"],
+                     beta=config["beta"],
+                     label_prior_strength=config["label_prior_strength"])
+        model.phi = np.load(path / "phi.npy")
+        model.vocab = vocab
+        model.V = vocab.V
+        model.K = config["K"]
+        model.label_names = config["label_names"]
+        model.label2id = config["label2id"]
+        model.default_topic_prior = np.full(model.K, model.alpha, dtype=np.float64)
+        return model, vocab
+
+    def predict(self, documents, labels=None, n_iter=50):
+        """Infer topic distributions for new documents using learned phi.
+
+        Parameters
+        ----------
+        documents : list of list of int
+            Token-id sequences.
+        labels : list of list of str or None
+            Optional label constraints for each document.
+        n_iter : int
+            Number of Gibbs sweeps for inference.
+
+        Returns
+        -------
+        theta : np.ndarray, shape [n_docs, K]
+        """
+        K = self.K
+        alpha, beta = self.alpha, self.beta
+        phi = self.phi
+        rng = np.random.RandomState(42)
+
+        topic_priors = []
+        for d in range(len(documents)):
+            if labels and labels[d]:
+                preset = np.array([self.label2id[l] for l in labels[d]
+                                   if l in self.label2id], dtype=np.int32)
+                prior = self._build_doc_topic_prior(preset)
+            else:
+                prior = self.default_topic_prior
+            topic_priors.append(prior)
+
+        n_dk = np.zeros((len(documents), K), dtype=np.int32)
+        all_z = []
+        for d, doc in enumerate(documents):
+            probs = topic_priors[d] / topic_priors[d].sum()
+            z_doc = rng.choice(K, size=len(doc), p=probs)
+            all_z.append(z_doc)
+            for i, w in enumerate(doc):
+                n_dk[d, z_doc[i]] += 1
+
+        for _ in range(n_iter):
+            for d, doc in enumerate(documents):
+                prior = topic_priors[d]
+                for i, w in enumerate(doc):
+                    k_old = all_z[d][i]
+                    n_dk[d, k_old] -= 1
+                    p = (n_dk[d] + prior) * phi[:, w]
+                    p /= p.sum()
+                    k_new = rng.choice(K, p=p)
+                    all_z[d][i] = k_new
+                    n_dk[d, k_new] += 1
+
+        prior_mat = np.vstack(topic_priors)
+        theta = (n_dk + prior_mat) / (
+            n_dk.sum(axis=1, keepdims=True) + prior_mat.sum(axis=1, keepdims=True)
+        )
+        return theta
+
+    def predict_labels(self, documents=None, labels=None, threshold=0.1, n_iter=50):
+        """Predict label assignments for documents.
+
+        Parameters
+        ----------
+        documents : list of list of int or None
+            If None, uses training documents' theta.
+        labels : list of list of str or None
+            Optional label constraints for new documents.
+        threshold : float
+            Minimum topic probability to assign a label.
+        n_iter : int
+            Gibbs sweeps for inference on new documents.
+
+        Returns
+        -------
+        list of list of str
+        """
+        if documents is None:
+            theta = self.theta
+        else:
+            theta = self.predict(documents, labels=labels, n_iter=n_iter)
+
         predictions = []
-        for d in range(self.D):
+        for d in range(theta.shape[0]):
             pred = [
                 self.label_names[k]
                 for k in range(self.K)
-                if self.theta[d, k] > threshold
+                if theta[d, k] > threshold
             ]
             predictions.append(pred)
         return predictions
@@ -595,7 +729,7 @@ class LightLDA:
     def fit(
         self,
         documents,
-        vocab=None,
+        vocab,
         n_iter=500,
         max_stale=50,
         mh_steps=2,
@@ -605,9 +739,10 @@ class LightLDA:
         """
         Parameters
         ----------
-        documents : list of list of str
-        vocab : Vocabulary or None
-            If None, build vocabulary from documents.
+        documents : list of list of int
+            Token-id sequences (already converted via vocab).
+        vocab : Vocabulary
+            Pre-loaded vocabulary.
         n_iter : int
             Number of MH sweeps.
         max_stale : int
@@ -618,11 +753,9 @@ class LightLDA:
             Number of MH sub-steps per token in each sweep. Each sub-step runs
             one doc proposal followed by one word proposal.
         """
-        if vocab is None:
-            vocab = Vocabulary.build(documents)
         self.vocab = vocab
         self.V = vocab.V
-        self.docs = vocab.docs2ids(documents)
+        self.docs = documents
         self.D = len(self.docs)
 
         self._initialize()
@@ -778,7 +911,71 @@ class LightLDA:
     def transform(self):
         return self.theta
 
+    def save(self, path):
+        """Save trained model to a directory."""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "phi.npy", self.phi)
+        self.vocab.save(path / "vocab.json")
+        with open(path / "config.json", "w") as f:
+            json.dump({"model": "lightlda", "K": self.K,
+                        "alpha": self.alpha, "beta": self.beta}, f)
 
+    @classmethod
+    def load(cls, path):
+        """Load a trained model from a directory. Returns (model, vocab)."""
+        path = Path(path)
+        with open(path / "config.json") as f:
+            config = json.load(f)
+        vocab = Vocabulary.load(path / "vocab.json")
+        model = cls(n_topics=config["K"], alpha=config["alpha"], beta=config["beta"])
+        model.phi = np.load(path / "phi.npy")
+        model.vocab = vocab
+        model.V = vocab.V
+        model.K = config["K"]
+        return model, vocab
+
+    def predict(self, documents, n_iter=50):
+        """Infer topic distributions for new documents using learned phi.
+
+        Parameters
+        ----------
+        documents : list of list of int
+            Token-id sequences.
+        n_iter : int
+            Number of Gibbs sweeps for inference.
+
+        Returns
+        -------
+        theta : np.ndarray, shape [n_docs, K]
+        """
+        K = self.K
+        alpha = self.alpha
+        phi = self.phi
+        rng = np.random.RandomState(42)
+
+        n_dk = np.zeros((len(documents), K), dtype=np.int32)
+        all_z = []
+        for d, doc in enumerate(documents):
+            z_doc = rng.randint(0, K, size=len(doc))
+            all_z.append(z_doc)
+            for i, w in enumerate(doc):
+                n_dk[d, z_doc[i]] += 1
+
+        for _ in range(n_iter):
+            for d, doc in enumerate(documents):
+                for i, w in enumerate(doc):
+                    k_old = all_z[d][i]
+                    n_dk[d, k_old] -= 1
+                    p = (n_dk[d] + alpha) * phi[:, w]
+                    p /= p.sum()
+                    k_new = rng.choice(K, p=p)
+                    all_z[d][i] = k_new
+                    n_dk[d, k_new] += 1
+
+        theta = (n_dk + alpha) / (n_dk.sum(axis=1, keepdims=True) + K * alpha)
+        return theta
+    
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Run one topic model: lda, labeled_lda, or lightlda."
@@ -799,7 +996,7 @@ def build_parser():
     parser.add_argument(
         "--vocab",
         default=None,
-        help="Optional vocabulary JSON path. If set, load and use it directly.",
+        help="Vocabulary JSON path (required when --input is provided).",
     )
     parser.add_argument("--n-topics", type=int, default=None)
     parser.add_argument("--n-iter", type=int, default=200)
@@ -838,27 +1035,38 @@ def build_parser():
     return parser
 
 
-def load_unlabeled_documents(input_path):
+def _build_demo_vocab(word_dict):
+    """Build a Vocabulary from a demo word dict (topic_name -> word_list)."""
+    all_words = sorted({w for words in word_dict.values() for w in words})
+    return Vocabulary({w: i for i, w in enumerate(all_words)})
+
+
+def load_unlabeled_data(input_path, vocab_path):
+    """Load corpus and vocab. Uses demo data when input_path is None."""
     if input_path is None:
-        return make_demo_corpus()
-    return read_corpus(input_path)
+        vocab = _build_demo_vocab(DEMO_TOPIC_WORDS)
+        raw_docs = make_demo_corpus()
+        documents = vocab.docs2ids(raw_docs)
+        return documents, vocab
+    vocab = Vocabulary.load(vocab_path)
+    documents = read_corpus(input_path, vocab)
+    return documents, vocab
 
 
-def load_labeled_documents(input_path):
+def load_labeled_data(input_path, vocab_path):
+    """Load labeled corpus and vocab. Uses demo data when input_path is None."""
     if input_path is None:
-        return make_labeled_demo_corpus()
-    return read_labeled_corpus(input_path)
-
-
-def load_or_build_vocab(documents, vocab_path):
-    if vocab_path is not None:
-        return Vocabulary.load(vocab_path)
-    return Vocabulary.build(documents)
+        vocab = _build_demo_vocab(DEMO_LABEL_WORDS)
+        raw_docs, labels = make_labeled_demo_corpus()
+        documents = vocab.docs2ids(raw_docs)
+        return documents, labels, vocab
+    vocab = Vocabulary.load(vocab_path)
+    documents, labels = read_labeled_corpus(input_path, vocab)
+    return documents, labels, vocab
 
 
 def run_lda(args):
-    documents = load_unlabeled_documents(args.input)
-    vocab = load_or_build_vocab(documents, args.vocab)
+    documents, vocab = load_unlabeled_data(args.input, args.vocab)
     n_topics = args.n_topics or len(DEMO_TOPIC_WORDS)
 
     model = LDA(
@@ -878,8 +1086,7 @@ def run_lda(args):
 
 
 def run_lightlda(args):
-    documents = load_unlabeled_documents(args.input)
-    vocab = load_or_build_vocab(documents, args.vocab)
+    documents, vocab = load_unlabeled_data(args.input, args.vocab)
     n_topics = args.n_topics or len(DEMO_TOPIC_WORDS)
 
     model = LightLDA(
@@ -901,8 +1108,7 @@ def run_lightlda(args):
 
 
 def run_labeled_lda(args):
-    documents, labels = load_labeled_documents(args.input)
-    vocab = load_or_build_vocab(documents, args.vocab)
+    documents, labels, vocab = load_labeled_data(args.input, args.vocab)
     alpha = args.alpha if args.alpha is not None else 0.01
 
     model = LabeledLDA(
@@ -928,59 +1134,6 @@ def print_run_summary(model_name, documents, vocab, model):
     print(f"Corpus: {len(documents)} docs, {vocab}")
     print(f"Topics: {model.K}")
 
-
-def build_save_payload(
-    model_name,
-    documents,
-    vocab,
-    model,
-    top_words,
-    theta_path,
-    phi_path,
-):
-    payload = {
-        "model": model_name,
-        "n_docs": len(documents),
-        "vocab_size": vocab.V,
-        "n_topics": model.K,
-        "vocabulary": vocab.vocab,
-        "topics": model.top_words(n=top_words),
-        "theta_path": str(theta_path),
-        "phi_path": str(phi_path),
-    }
-
-    if model_name == "labeled_lda":
-        payload["label_names"] = model.label_names
-        payload["predicted_labels"] = model.predict_labels()
-
-    return payload
-
-
-def save_model_outputs(output_path, model_name, documents, vocab, model, top_words):
-    output_json_path = Path(output_path)
-    output_json_path.parent.mkdir(parents=True, exist_ok=True)
-
-    theta_path = output_json_path.with_suffix(".theta.npy")
-    phi_path = output_json_path.with_suffix(".phi.npy")
-    np.save(theta_path, model.theta)
-    np.save(phi_path, model.phi)
-
-    payload = build_save_payload(
-        model_name,
-        documents,
-        vocab,
-        model,
-        top_words,
-        theta_path,
-        phi_path,
-    )
-    with open(output_json_path, "w", encoding="utf-8") as output_file:
-        json.dump(payload, output_file, ensure_ascii=False, indent=2)
-    print(f"\nSaved outputs to: {output_json_path}")
-    print(f"Saved theta to: {theta_path}")
-    print(f"Saved phi to: {phi_path}")
-
-
 def main():
     args = build_parser().parse_args()
     model_name = args.model.replace("-", "_")
@@ -997,14 +1150,8 @@ def main():
     model.print_topics(n=args.top_words)
 
     if args.output is not None:
-        save_model_outputs(
-            args.output,
-            model_name,
-            documents,
-            vocab,
-            model,
-            args.top_words,
-        )
+        model.save(args.output)
+        print(f"\nModel saved to: {args.output}")
 
 
 if __name__ == "__main__":
