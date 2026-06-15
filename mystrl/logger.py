@@ -35,7 +35,7 @@ def build_logger():
     logger.addHandler(console_handler)                                                               
     return logger
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logger")
 if not os.path.exists(LOG_DIR):
     try:
         os.mkdir(LOG_DIR)

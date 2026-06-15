@@ -372,7 +372,8 @@ class SnakeDQN(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, 7, padding=3),                                                          
             nn.ReLU(inplace=True),                                                                      
-        )                                                                                               
+        )  
+        self.device = args.device                                                                                             
         self.pool = nn.AdaptiveAvgPool2d((4, 4))                                                        
         self.feature_size = 128 * 4 * 4                                                                 
                                                                                                         
@@ -392,7 +393,10 @@ class SnakeDQN(nn.Module):
         x = state[0]
                                                                                
         conv_out = self.conv_layers(x)
-        pooled = self.pool(conv_out) 
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat = pooled.view(pooled.size(0), -1)
                                                                                                         
         features = self.feature_compressor(flat)
@@ -461,6 +465,7 @@ class SnakePPO(nn.Module):
             nn.Conv2d(128, 128, 7, padding=3),
             nn.ReLU(inplace=True),
         )
+        self.device = args.device
         self.pool = nn.AdaptiveAvgPool2d((4, 4))
         feature_size = 128 * 4 * 4
 
@@ -475,7 +480,10 @@ class SnakePPO(nn.Module):
     def forward(self, state):
         x        = state[0]
         conv_out = self.conv_layers(x)
-        pooled   = self.pool(conv_out)
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat     = pooled.view(pooled.size(0), -1)
         features = self.feature_compressor(flat)
         return self.actor(features), self.critic(features)

@@ -393,6 +393,7 @@ class FlappyBirdDQN(nn.Module):
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
         )
+        self.device = args.device
         self.pool = nn.AdaptiveAvgPool2d((4, 4))
         feature_size = 128 * 4 * 4
 
@@ -411,7 +412,10 @@ class FlappyBirdDQN(nn.Module):
     def forward(self, state):
         x        = state[0].float()
         conv_out = self.conv_layers(x)
-        pooled   = self.pool(conv_out)
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat     = pooled.view(pooled.size(0), -1)
         features = self.feature_compressor(flat)
 
@@ -442,6 +446,7 @@ class FlappyBirdPPO(nn.Module):
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
         )
+        self.device = args.device
         self.pool = nn.AdaptiveAvgPool2d((4, 4))
         feature_size = 128 * 4 * 4
 
@@ -456,7 +461,10 @@ class FlappyBirdPPO(nn.Module):
     def forward(self, state):
         x        = state[0].float()
         conv_out = self.conv_layers(x)
-        pooled   = self.pool(conv_out)
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat     = pooled.view(pooled.size(0), -1)
         features = self.feature_compressor(flat)
         return self.actor(features), self.critic(features)

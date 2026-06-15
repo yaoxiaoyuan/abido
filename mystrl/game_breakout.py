@@ -602,6 +602,7 @@ class BreakoutDQN(nn.Module):
         in_channels = 3 * args.n_last_frames   # brick / ball / paddle channels
 
         self.conv_layers = _build_conv_backbone(in_channels)
+        self.device = args.device
         self.pool        = nn.AdaptiveAvgPool2d((_POOL_SIZE, _POOL_SIZE))
         self.feature_compressor = nn.Sequential(
             nn.Linear(_FEATURE_SIZE, 256),
@@ -618,7 +619,10 @@ class BreakoutDQN(nn.Module):
     def forward(self, state):
         x        = state[0].float()
         conv_out = self.conv_layers(x)
-        pooled   = self.pool(conv_out)
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat     = pooled.view(pooled.size(0), -1)
         features = self.feature_compressor(flat)
 
@@ -646,6 +650,7 @@ class BreakoutPPO(nn.Module):
         in_channels = 3 * args.n_last_frames
 
         self.conv_layers = _build_conv_backbone(in_channels)
+        self.device = args.device
         self.pool        = nn.AdaptiveAvgPool2d((_POOL_SIZE, _POOL_SIZE))
         self.feature_compressor = nn.Sequential(
             nn.Linear(_FEATURE_SIZE, 256),
@@ -658,7 +663,10 @@ class BreakoutPPO(nn.Module):
     def forward(self, state):
         x        = state[0].float()
         conv_out = self.conv_layers(x)
-        pooled   = self.pool(conv_out)
+        if self.device == "mps":
+            pooled = self.pool(conv_out.to("cpu")).to(self.device) 
+        else:
+            pooled = self.pool(conv_out) 
         flat     = pooled.view(pooled.size(0), -1)
         features = self.feature_compressor(flat)
         return self.actor(features), self.critic(features)
