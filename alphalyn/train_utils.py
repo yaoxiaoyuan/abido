@@ -124,8 +124,8 @@ def _play_one_game(
     first_ai.reset()
     second_ai.reset()
 
-    move_history: List[Tuple[np.ndarray, np.ndarray, int]] = []
-    # Each entry: (board_encoding, policy_vector, player_who_moved)
+    move_history: List[Tuple[np.ndarray, np.ndarray, int, float]] = []
+    # Each entry: (board_encoding, policy_vector, player_who_moved, q_values)
 
     move_count = 0
     num_actions = game.num_actions
@@ -155,13 +155,14 @@ def _play_one_game(
 
         # Select and apply action
         action = ai._mcts.select_action(action_probs, greedy=(temperature == 0.0))
+        q_value = ai._mcts._root.mean_value
         game.move(current_player, action)
 
         # Both AIs observe the action to keep their trees in sync
         first_ai.observe_action(action)
         second_ai.observe_action(action)
 
-        move_history.append((board_encoding, policy_vector, current_player))
+        move_history.append((board_encoding, policy_vector, current_player, q_value))
         move_count += 1
 
     # Determine outcome for value targets
@@ -171,7 +172,7 @@ def _play_one_game(
     policies: List[np.ndarray] = []
     values: List[float] = []
 
-    for board_encoding, policy_vector, player_who_moved in move_history:
+    for board_encoding, policy_vector, player_who_moved, q_value in move_history:
         if winner == game.RESULT_TIE:
             value = 0.0
         elif winner == player_who_moved:
@@ -180,6 +181,8 @@ def _play_one_game(
             value = -1.0
         boards.append(board_encoding)
         policies.append(policy_vector)
+
+        value = (value + q_value) / 2
         values.append(value)
 
     return boards, policies, values

@@ -311,8 +311,8 @@ def main() -> None:
     #model_path = "model/connect4/checkpoint_iter125.pt"
     game_name = "othello"
     #model_path = "model/othello/checkpoint_iter86.pt"
-    model_path = "model/othello_v2_s2/checkpoint_iter36.pt"
-    sims = 2000
+    model_path = "model/othello_v2_s3/checkpoint_iter4.pt"
+    sims = 5000
     max_depth = 2
     max_children = 10
     tree_out = "mcts_tree.svg"
@@ -360,7 +360,7 @@ def main() -> None:
     mcts = MCTS(game, net, mcts_config)
 
     print(f"[mcts] Running {sims} simulations…")
-    action_probs = mcts.get_action_probs(temperature=1.0)
+    action_probs = mcts.get_action_probs(temperature=1.0, batch_size=4)
 
     # Print top-5 moves.
     sorted_probs = sorted(action_probs, key=lambda x: x[1], reverse=True)

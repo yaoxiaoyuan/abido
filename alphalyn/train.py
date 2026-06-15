@@ -163,8 +163,8 @@ class SelfPlayDataset(Dataset):
         return len(self.values)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        board = torch.from_numpy(self.boards[index])
-        policy = torch.from_numpy(self.policies[index])
+        board = torch.tensor(self.boards[index], dtype=torch.float32)
+        policy = torch.tensor(self.policies[index], dtype=torch.float32)
         value = torch.tensor(self.values[index], dtype=torch.float32)
         return board, policy, value
 

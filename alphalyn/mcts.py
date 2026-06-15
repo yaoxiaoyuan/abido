@@ -114,7 +114,6 @@ class MCTSNode:
         "prior_probability",
         "visit_count",
         "total_value",
-        "mean_value",
         "children",
         "is_expanded",
         "game_state",
@@ -132,10 +131,14 @@ class MCTSNode:
         self.prior_probability = prior_probability
         self.visit_count: int = 0
         self.total_value: float = 0.0
-        self.mean_value: float = 0.0   # cached Q(s,a); updated incrementally in backup()
         self.children: Dict[int, MCTSNode] = {}
         self.is_expanded: bool = False
         self.game_state = game_state  # GameState | None
+
+    @property
+    def mean_value(self) -> float:
+        """Q(s,a) = W / N, computed on the fly from total_value and visit_count."""
+        return self.total_value / self.visit_count if self.visit_count > 0 else 0.0
 
     # ------------------------------------------------------------------
     # PUCT selection
@@ -199,15 +202,9 @@ class MCTSNode:
         The value is from the perspective of the player who just moved into
         this node.  Each ancestor alternates perspective, so we negate at
         every step.
-
-        ``mean_value`` is updated incrementally here using the recurrence:
-            Q_new = Q_old + (value - Q_old) / N_new
-        which is numerically equivalent to ``total_value / visit_count`` but
-        avoids a division on every PUCT lookup.
         """
         self.visit_count += 1
         self.total_value += value
-        self.mean_value += (value - self.mean_value) / self.visit_count
         if self.parent is not None:
             self.parent.backup(-value)
 
@@ -402,7 +399,7 @@ class MCTS:
             unique leaves evaluated and backed up).  This may be less than
             *batch_size* when duplicate paths are discarded.
         """
-        VIRTUAL_LOSS = -1.0
+        VIRTUAL_LOSS = 1.0
 
         # ----------------------------------------------------------------
         # Phase 1 – Selection: walk each simulation to a leaf, apply
