@@ -125,7 +125,7 @@ class PACEDataset(Dataset):
 
         # When contrastive learning is active, docs must be long enough to
         # produce both positive and negative chunks (at least 3 * min_ctx_size).
-        min_doc_len = 3 * min_size if positive_window > 1 else min_size
+        min_doc_len = 2 * min_size if positive_window > 1 else min_size
 
         # ── Build vocabulary from pre-built word list ─────────────────────────
         self.vocab = {
@@ -431,6 +431,7 @@ class PACEModel(nn.Module):
 
         super(PACEModel, self).__init__()
 
+        self.vocab_size      = vocab_size
         self.embedding_dim   = embedding_dim
         self.n_heads         = n_heads
         self.head_dim        = embedding_dim // n_heads
@@ -1315,6 +1316,7 @@ def parse_args():
                              'strings (no special tokens).  When provided, the vocabulary is '
                              'built directly from that list in order and min_count is ignored. '
                              'When omitted, vocab is derived from training data using min_count.')
+    parser.add_argument('--reload_path', type=str, default='')
 
     # ── Embedding model architecture ──────────────────────────────────────────
     parser.add_argument('--embedding_dim', type=int, default=128)
@@ -1415,7 +1417,10 @@ def train(args):
         use_rope=not args.no_rope,
         use_cls=args.use_cls,
     )
-    
+    if args.reload_path:
+        state_dict = torch.load(args.reload_path, map_location="cpu")
+        model.load_state_dict(state_dict)
+
     print(model)
 
     # Print model parameter count
