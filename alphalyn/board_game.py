@@ -145,6 +145,16 @@ class GameArgs:
         parser.add_argument("--device", type=str, default="cpu",
                             choices=["cpu", "cuda", "mps"],
                             help="Device for model inference (default: cpu)")
+        parser.add_argument("--fpu", type=float, default=0.0,
+                            help="First Play Urgency value; meaning depends on --fpu-strategy: 'reduction' subtracts from parent Q, 'fixed' uses as flat Q for unvisited nodes (default: 0.0)")
+        parser.add_argument("--fpu-strategy", default="reduction", choices=["reduction", "fixed"],
+                            help="FPU strategy: 'reduction' inherits parent Q, 'fixed' uses flat Q=fpu (default: reduction)")
+        parser.add_argument("--c-puct-strategy", default="fixed", choices=["fixed", "dynamic"],
+                            help="PUCT strategy: 'fixed' constant c_puct, 'dynamic' grows with log((N+c_base)/c_base) (default: fixed)")
+        parser.add_argument("--c-base", type=float, default=19652.0,
+                            help="Base constant for dynamic PUCT formula (default: 19652.0)")
+        parser.add_argument("--c-puct", type=float, default=1.5,
+                            help="PUCT exploration constant (default: 1.5)")
 
     def __init__(self, namespace: argparse.Namespace,
                  width: int = 0, height: int = 0, title: str = "Board Game") -> None:
@@ -180,6 +190,11 @@ class GameArgs:
         self.num_residual_blocks:   int  = getattr(namespace, "blocks",                  10)
         self.value_head_hidden_size: int = getattr(namespace, "value_hidden",            256)
         self.device:                 str  = getattr(namespace, "device",                "cpu")
+        self.fpu:                   float = getattr(namespace, "fpu",                    0.0)
+        self.fpu_strategy:          float = getattr(namespace, "fpu_strategy",          "fixed")
+        self.c_puct_strategy:       str = getattr(namespace, "c_puct_strategy",         "fixed")
+        self.c_base:                float = getattr(namespace, "c_base",                19652.0)
+        self.c_puct:                float = getattr(namespace, "c_puct",                1.5)
 
 
 @dataclass
@@ -1243,11 +1258,25 @@ def run_gui_demo(game: BoardGame, args: "GameArgs") -> None:
         if not game.state.is_game_over and not game._show_reset_panel:
             current_ai = _current_ai()
             if current_ai is not None:
+                
+                print("current AI analysis:")
+                if current_ai._mcts._root:
+                    print(f"visits: {current_ai._mcts._root.visit_count}")
+
                 action = current_ai.next_move()
+
+                print(f"value is {current_ai._mcts._root.mean_value}")
+                current_ai._mcts.analysis()
+
                 game.move(game.state.turn, action)
                 # Notify the acting AI, then also notify the opponent AI (ai-vs-ai)
                 # so both trees stay in sync with the actual game history.
                 current_ai.observe_action(action)
+
+                print(f"\nafter move, current AI analysis: value is {current_ai._mcts._root.mean_value}")
+                current_ai._mcts.analysis()
+                print()
+
                 opponent_ai = ai_player_second if current_ai is ai_player_first else ai_player_first
                 if opponent_ai is not None:
                     opponent_ai.observe_action(action)
@@ -1564,6 +1593,11 @@ def _build_ai(
             # Dirichlet noise is for training-time exploration only;
             # disable it entirely during play so the AI is deterministic.
             dirichlet_epsilon=0.0,
+            fpu_value=args.fpu,
+            fpu_strategy=args.fpu_strategy,
+            c_puct_strategy=args.c_puct_strategy,
+            c_puct=args.c_puct,
+            c_base=args.c_base
         ),
         greedy=True,
         batch_size=args.mcts_batch,

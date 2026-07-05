@@ -22,6 +22,7 @@ Typical usage
 
 from __future__ import annotations
 
+import random
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -48,7 +49,29 @@ class MCTSConfig:
         call.  Higher values give stronger play at the cost of more compute.
     c_puct:
         Exploration constant in the PUCT formula.  Larger values encourage
-        more exploration of less-visited nodes.
+        more exploration of less-visited nodes.  When ``c_puct_strategy`` is
+        ``"dynamic"``, this serves as the base constant that is then augmented
+        by ``c_puct + log((N + c_base) / c_base)``.
+    c_puct_strategy:
+        How ``c_puct`` is applied during PUCT selection.  Two strategies are
+        supported:
+
+        - **"fixed"** (default): ``c_puct`` is used as a constant multiplier.
+          The exploration term is
+          ``c_puct * P(s,a) * sqrt(N(s)) / (1 + N(s,a))``.
+
+        - **"dynamic"**: The effective exploration constant grows with the
+          parent's visit count:
+          ``(c_puct + log((N(s) + c_base) / c_base)) * P(s,a) * sqrt(N(s)) / (1 + N(s,a))``.
+          Early in the search (small N) the effective constant is close to
+          ``c_puct``; as N grows it increases, giving wider exploration when
+          the tree is well-established and then naturally scaling the
+          confidence interval.  ``c_base`` controls the growth rate.
+    c_base:
+        Base constant used in the dynamic PUCT formula.  Only takes effect
+        when ``c_puct_strategy = "dynamic"``.  The log term is
+        ``log((parent_visits + c_base) / c_base)``; a larger ``c_base``
+        slows the growth of the effective exploration constant.
     dirichlet_alpha:
         Alpha parameter for Dirichlet noise added to the root prior.  Set to
         ``0.0`` to disable noise (useful during evaluation / self-play testing).
@@ -60,16 +83,54 @@ class MCTSConfig:
         Board cell value representing PLAYER_SECOND's stone (default 2).
     device:
         Torch device string (``"cpu"``, ``"cuda"``, ``"mps"``).
+    playout_cap_random:
+        Probability of using a reduced playout cap instead of the full
+        ``num_simulations``.  When a random draw falls below this value, the
+        search runs only ``num_simulations * playout_cap_ratio`` simulations.
+        This produces weaker-but-diverse training data, similar to KataGo's
+        randomised cap mechanism.  Set to ``0.0`` (default) to always use the
+        full simulation budget.
+    playout_cap_ratio:
+        Fraction of ``num_simulations`` used when the cap is triggered.  For
+        example, ``0.5`` means half the normal budget.  Only takes effect when
+        ``playout_cap_random > 0`` and the random draw triggers the cap.
+    fpu_value:
+        First Play Urgency — a numeric parameter whose meaning depends on
+        ``fpu_strategy`` (see below).  The default ``0.0`` means unvisited
+        nodes exactly inherit the parent's average Q (in "reduction" mode) or
+        get a neutral Q of 0.0 (in "fixed" mode).
+
+    fpu_strategy:
+        How ``fpu_value`` is applied to unvisited (N=0) children during PUCT
+        selection.  Two strategies are supported:
+
+        - **"reduction"** (default): Unvisited children inherit the parent's
+          mean_value, converted to the child's (opponent's) perspective by
+          negation, then reduced by ``fpu_value``: ``Q = -parent_Q - fpu_value``.
+          Because PUCT negates Q, a **positive** ``fpu_value`` makes unvisited
+          nodes *more* attractive (wider exploration) and a **negative** value
+          makes them *less* attractive (deeper search on known paths).
+
+        - **"fixed"**: Unvisited children get a flat ``Q = fpu_value`` with no
+          inheritance from the parent.  This decouples FPU from the parent's
+          estimate entirely.  For example, ``fpu_value = -1`` forces unvisited
+          nodes to look very bad from the opponent's view, keeping search
+          focused on already-visited paths.
     """
 
     num_simulations: int = 400
     c_puct: float = 1.5
+    c_puct_strategy: str = "fixed"
+    c_base: float = 20000
     dirichlet_alpha: float = 0.3
     dirichlet_epsilon: float = 0.25
     board_player_first_value: int = 1
     board_player_second_value: int = 2
     device: str = "cpu"
-
+    playout_cap_random: float = 0
+    playout_cap_ratio: float = 0.5
+    fpu_value: float = 0
+    fpu_strategy: str = "fixed"
 
 
 
@@ -144,7 +205,7 @@ class MCTSNode:
     # PUCT selection
     # ------------------------------------------------------------------
 
-    def puct_score(self, c_puct: float) -> float:
+    def puct_score(self, c_puct_strategy: str, c_puct: float, c_base: float, fpu_strategy: str, fpu: float) -> float:
         """Compute the PUCT score used to select which child to visit.
 
         PUCT(s, a) = -Q(s, a) + c_puct * P(s, a) * sqrt(N(s)) / (1 + N(s, a))
@@ -158,12 +219,24 @@ class MCTSNode:
         where N(s) is the parent's visit count and N(s, a) is this node's.
         """
         parent_visits = self.parent.visit_count if self.parent is not None else 1
-        exploration = c_puct * self.prior_probability * math.sqrt(parent_visits) / (1 + self.visit_count)
-        return -self.mean_value + exploration
 
-    def best_child(self, c_puct: float) -> Tuple[int, "MCTSNode"]:
+        if c_puct_strategy == "dynamic":
+            c_puct = c_puct + math.log((parent_visits + c_base) / c_base)
+
+        exploration = c_puct * self.prior_probability * math.sqrt(parent_visits) / (1 + self.visit_count)
+        
+        q_value = self.mean_value
+        if self.visit_count == 0:
+            if fpu_strategy == "fixed":
+                q_value = -fpu
+            elif fpu_strategy == "reduction":
+                q_value = -self.parent.mean_value - fpu
+
+        return -q_value + exploration
+
+    def best_child(self, c_puct_strategy: str, c_puct: float, c_base: float, fpu_strategy: str, fpu: float) -> Tuple[int, "MCTSNode"]:
         """Return (action_index, child_node) with the highest PUCT score."""
-        return max(self.children.items(), key=lambda item: item[1].puct_score(c_puct))
+        return max(self.children.items(), key=lambda item: item[1].puct_score(c_puct_strategy, c_puct, c_base, fpu_strategy, fpu))
 
     # ------------------------------------------------------------------
     # Expansion & backup
@@ -286,18 +359,21 @@ class MCTS:
         # Add Dirichlet noise to the root prior for exploration during training
         if not self._root.is_expanded:
             self._expand_and_evaluate(self._root)
-            #visualize_tree(self, "mcts_tree.svg", 2, 7)
-            #input("1")
+ 
         if self.config.dirichlet_alpha > 0.0 and self._root.children:
             self._add_dirichlet_noise(self._root)
 
+        num_simulations = self.config.num_simulations
+        if random.random() < self.config.playout_cap_random:
+            num_simulations = int(self.config.num_simulations * self.config.playout_cap_ratio)
+
         if batch_size <= 1:
-            for _ in range(self.config.num_simulations):
-                self._simulate()
+            for _ in range():
+                self._simulate(num_simulations)
         else:
             completed = 0
-            while completed < self.config.num_simulations:
-                remaining = self.config.num_simulations - completed
+            while completed < num_simulations:
+                remaining = num_simulations - completed
                 completed += self._simulate_batch(min(batch_size, remaining))
 
         return self._build_action_probs(temperature)
@@ -356,7 +432,13 @@ class MCTS:
 
         # --- Selection: traverse to a leaf using PUCT ---
         while not node.is_leaf() and not node.game_state.is_game_over:
-            _action_index, node = node.best_child(self.config.c_puct)
+            _action_index, node = node.best_child(
+                self.config.c_puct_strategy, 
+                self.config.c_puct, 
+                self.config.c_base, 
+                self.config.fpu_strategy, 
+                self.config.fpu_value
+            )
 
         # --- Expansion & evaluation ---
         if node.game_state.is_game_over:
@@ -419,7 +501,13 @@ class MCTS:
             node.total_value += VIRTUAL_LOSS
 
             while not node.is_leaf() and not node.game_state.is_game_over:
-                _action_index, node = node.best_child(self.config.c_puct)
+                _action_index, node = node.best_child(
+                    self.config.c_puct_strategy, 
+                    self.config.c_puct, 
+                    self.config.c_base, 
+                    self.config.fpu_strategy, 
+                    self.config.fpu_value
+                )
                 node.visit_count += 1
                 node.total_value += VIRTUAL_LOSS
                 path.append(node)
@@ -625,6 +713,25 @@ class MCTS:
 
         return action_probs
 
+    def analysis(self) -> List[Tuple[MoveAction, float]]:
+        """Analysis move"""
+        current_player = self.game.state.turn
+
+        children_items = list(self._root.children.items())
+        visit_counts = np.array([child.visit_count for _, child in children_items], dtype=np.float64)
+        probs = visit_counts / visit_counts.sum()
+
+        res = [(action_index, _child, prob) for (action_index, _child), prob in zip(children_items, probs)]
+        res.sort(key=lambda x:x[2])
+        print("top visits:")
+        for action_index, child, prob in res[-3:][::-1]:
+            action = self.game.index_to_action(action_index, current_player)
+            print(f"action: {action}, visits: {child.visit_count}, prior: {child.prior_probability}, prob: {prob}, value: {child.mean_value}")
+        print("top prior:")
+        res.sort(key=lambda x:x[1].prior_probability)
+        for action_index, child, prob in res[-3:][::-1]:
+            action = self.game.index_to_action(action_index, current_player)
+            print(f"action: {action}, visits: {child.visit_count}, prior: {child.prior_probability}, prob: {prob}, value: {child.mean_value}")
 
 # ---------------------------------------------------------------------------
 # Tree visualisation

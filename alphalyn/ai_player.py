@@ -60,7 +60,7 @@ class AIPlayerConfig:
     mcts: MCTSConfig = field(default_factory=MCTSConfig)
     temperature: float = 1.0
     greedy: bool = False
-    batch_size: int = 64
+    batch_size: int = 4
 
 
 # ---------------------------------------------------------------------------

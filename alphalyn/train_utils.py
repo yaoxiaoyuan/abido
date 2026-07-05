@@ -103,11 +103,9 @@ def _add_game_specific_args(parser: argparse.ArgumentParser, game_name: str) -> 
 
 def _play_one_game(
     game: BoardGame,
-    first_ai: AIPlayer,
-    second_ai: AIPlayer,
+    ai: AIPlayer,
     net: PolicyValueNet,
-    temperature_threshold: int,
-    num_input_planes: int,
+    temperature_threshold: int
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[float]]:
     """Play one complete self-play game and collect training samples.
 
@@ -121,8 +119,7 @@ def _play_one_game(
         Final game outcome from each position's perspective (+1 / -1 / 0).
     """
     game.reset()
-    first_ai.reset()
-    second_ai.reset()
+    ai.reset()
 
     move_history: List[Tuple[np.ndarray, np.ndarray, int, float]] = []
     # Each entry: (board_encoding, policy_vector, player_who_moved, q_values)
@@ -132,7 +129,6 @@ def _play_one_game(
 
     while not game.state.is_game_over:
         current_player = game.state.turn
-        ai = first_ai if current_player == game.PLAYER_FIRST else second_ai
 
         # Use exploratory temperature for early moves, greedy afterwards.
         temperature = 1.0 if move_count < temperature_threshold else 0.0
@@ -158,9 +154,8 @@ def _play_one_game(
         q_value = ai._mcts._root.mean_value
         game.move(current_player, action)
 
-        # Both AIs observe the action to keep their trees in sync
-        first_ai.observe_action(action)
-        second_ai.observe_action(action)
+        # AI observe the action to keep tree in sync
+        ai.observe_action(action)
 
         move_history.append((board_encoding, policy_vector, current_player, q_value))
         move_count += 1

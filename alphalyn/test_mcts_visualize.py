@@ -311,7 +311,7 @@ def main() -> None:
     #model_path = "model/connect4/checkpoint_iter125.pt"
     game_name = "othello"
     #model_path = "model/othello/checkpoint_iter86.pt"
-    model_path = "model/othello_v2_s3/checkpoint_iter4.pt"
+    model_path = "model/othello_v2_s5/checkpoint_iter161.pt"
     sims = 5000
     max_depth = 2
     max_children = 10

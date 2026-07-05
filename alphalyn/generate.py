@@ -112,7 +112,6 @@ class GenerationConfig:
     games_per_iter: int = 4
     reload_interval: int = 4
     device: str = "cpu"
-    mcts: MCTSConfig = field(default_factory=MCTSConfig)
     ai_player: AIPlayerConfig = field(default_factory=AIPlayerConfig)
     temperature_threshold: int = 30
     num_input_planes: int = 3
@@ -189,24 +188,7 @@ def generate(config: GenerationConfig) -> None:
 
     net.eval()
 
-    mcts_config = MCTSConfig(
-        num_simulations=config.mcts.num_simulations,
-        c_puct=config.mcts.c_puct,
-        dirichlet_alpha=config.mcts.dirichlet_alpha,
-        dirichlet_epsilon=config.mcts.dirichlet_epsilon,
-        board_player_first_value=config.mcts.board_player_first_value,
-        board_player_second_value=config.mcts.board_player_second_value,
-        device=config.device,
-    )
-    ai_config = AIPlayerConfig(
-        mcts=mcts_config,
-        temperature=config.ai_player.temperature,
-        greedy=config.ai_player.greedy,
-        batch_size=config.ai_player.batch_size,
-    )
-
-    first_ai = AIPlayer(game, net, ai_config)
-    second_ai = AIPlayer(game, net, ai_config)
+    ai = AIPlayer(game, net, config.ai_player)
 
     logger.info(
         "Worker %d starting continuous generation on device '%s' "
@@ -248,11 +230,9 @@ def generate(config: GenerationConfig) -> None:
             game_start = time.time()
             boards, policies, values = _play_one_game(
                 game=game,
-                first_ai=first_ai,
-                second_ai=second_ai,
+                ai=ai,
                 net=net,
-                temperature_threshold=config.temperature_threshold,
-                num_input_planes=config.num_input_planes,
+                temperature_threshold=config.temperature_threshold
             )
             game_elapsed = time.time() - game_start
 
@@ -334,6 +314,18 @@ def _parse_args() -> GenerationConfig:
                         help="MCTS inference batch size (default: 4)")
     parser.add_argument("--temp-threshold", type=int, default=30,
                         help="Moves before this use temperature=1.0; after use greedy (default: 30)")
+    parser.add_argument("--playout-cap-random", type=float, default=0.0,
+                        help="Probability of using reduced playout cap (KataGo-style); 0.0 disables (default: 0.0)")
+    parser.add_argument("--playout-cap-ratio", type=float, default=0.5,
+                        help="Fraction of sims when playout cap triggers (default: 0.5)")
+    parser.add_argument("--fpu", type=float, default=0.0,
+                        help="First Play Urgency value; meaning depends on --fpu-strategy: 'reduction' subtracts from parent Q, 'fixed' uses as flat Q for unvisited nodes (default: 0.0)")
+    parser.add_argument("--fpu-strategy", default="fixed", choices=["reduction", "fixed"],
+                        help="FPU strategy: 'reduction' inherits parent Q, 'fixed' uses flat Q=fpu (default: reduction)")
+    parser.add_argument("--c-puct-strategy", default="fixed", choices=["fixed", "dynamic"],
+                        help="PUCT strategy: 'fixed' constant c_puct, 'dynamic' grows with log((N+c_base)/c_base) (default: fixed)")
+    parser.add_argument("--c-base", type=float, default=19652.0,
+                        help="Base constant for dynamic PUCT formula (default: 19652.0)")
     parser.add_argument("--filters", type=int, default=128,
                         help="ResNet filter count; must match checkpoint (default: 128)")
     parser.add_argument("--blocks", type=int, default=10,
@@ -349,7 +341,14 @@ def _parse_args() -> GenerationConfig:
         dirichlet_alpha=args.dirichlet_alpha,
         dirichlet_epsilon=args.dirichlet_epsilon,
         device=args.device,
+        playout_cap_random=args.playout_cap_random,
+        playout_cap_ratio=args.playout_cap_ratio,
+        fpu_value=args.fpu,
+        fpu_strategy=args.fpu_strategy,
+        c_puct_strategy=args.c_puct_strategy,
+        c_base=args.c_base
     )
+
     ai_config = AIPlayerConfig(
         mcts=mcts_config,
         batch_size=args.mcts_batch,
@@ -363,7 +362,6 @@ def _parse_args() -> GenerationConfig:
         games_per_iter=args.games_per_iter,
         reload_interval=args.reload_interval,
         device=args.device,
-        mcts=mcts_config,
         ai_player=ai_config,
         temperature_threshold=args.temp_threshold,
         num_filters=args.filters,
