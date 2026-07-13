@@ -116,6 +116,10 @@ class TrainingConfig:
         Cosine schedule: minimum LR.
     game_namespace:
         argparse.Namespace forwarded to the game's Args constructor.
+    value_mix_weight:
+        Weight for blending MCTS Q-value with the game outcome.  The final
+        value target is ``outcome * (1 - w) + q_value * w``.  Default 0
+        (equal blend); set to 0.0 for pure outcome, 1.0 for pure Q-value.
     """
     game_name: str = "othello"
     save_path: str = "checkpoint.pt"
@@ -138,7 +142,7 @@ class TrainingConfig:
     lr_min: float = 1e-5
     augment: bool = False
     game_namespace: argparse.Namespace = field(default_factory=argparse.Namespace)
-
+    value_mix_weight: float = 0
 
 # ---------------------------------------------------------------------------
 # Dataset
@@ -147,7 +151,7 @@ class TrainingConfig:
 class SelfPlayDataset(Dataset):
     """PyTorch Dataset that loads .npz files from a list of batch directories."""
 
-    def __init__(self, batch_dirs: List[str]) -> None:
+    def __init__(self, batch_dirs: List[str], value_mix_weight: float) -> None:
         self.boards: List[np.ndarray] = []
         self.policies: List[np.ndarray] = []
         self.values: List[float] = []
@@ -157,7 +161,12 @@ class SelfPlayDataset(Dataset):
                 data = np.load(npz_path)
                 self.boards.extend(data["boards"])
                 self.policies.extend(data["policies"])
-                self.values.extend(data["values"].tolist())
+                
+                values = data["values"]
+                if value_mix_weight > 0:
+                    values = (1 - value_mix_weight) * values + value_mix_weight * data["q_values"]
+
+                self.values.extend(values.tolist())
 
     def __len__(self) -> int:
         return len(self.values)
@@ -215,7 +224,8 @@ def _train_one_epoch(
         if augment_fn is not None:
             boards, policies, values = augment_fn(boards, policies, values)
 
-        log_policy, predicted_value = net(boards)
+        outputs = net(boards)
+        log_policy, predicted_value = outputs["log_policy"], outputs["value"]
 
         policy_loss = -(policies * log_policy).sum(dim=1).mean()
         value_loss = nn.functional.mse_loss(predicted_value, values)
@@ -337,7 +347,7 @@ def train(config: TrainingConfig) -> None:
         replay_dirs = _collect_replay_dirs(
             config.data_dir, next_iter, config.replay_buffer_batches
         )
-        dataset = SelfPlayDataset(replay_dirs)
+        dataset = SelfPlayDataset(replay_dirs, value_mix_weight=config.value_mix_weight)
         if len(dataset) == 0:
             logger.warning("Dataset is empty for iter %d — skipping", next_iter)
             next_iter += 1
@@ -439,7 +449,8 @@ def _parse_args() -> TrainingConfig:
                         help="Cosine schedule: minimum LR (default: 1e-5)")
     parser.add_argument("--augment", action="store_true", default=False,
                         help="Enable symmetry-based data augmentation (game-dependent)")
-
+    parser.add_argument("--value-mix-weight", type=float, default=0,
+                        help="Blend weight between game outcome and MCTS Q-value for value targets: outcome*(1-w)+q*w (default: 0)")
     args = parser.parse_args()
 
     return TrainingConfig(
@@ -463,6 +474,7 @@ def _parse_args() -> TrainingConfig:
         lr_min=args.lr_min,
         augment=args.augment,
         game_namespace=args,
+        value_mix_weight=args.value_mix_weight
     )
 
 

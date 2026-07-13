@@ -311,14 +311,18 @@ def main() -> None:
     #model_path = "model/connect4/checkpoint_iter125.pt"
     game_name = "othello"
     #model_path = "model/othello/checkpoint_iter86.pt"
-    model_path = "model/othello_v2_s5/checkpoint_iter161.pt"
-    sims = 5000
+    model_path = "model/othello_v5/checkpoint.pt"
+    sims = 20000
     max_depth = 2
     max_children = 10
     tree_out = "mcts_tree.svg"
     heatmap_out = "mcts_policy.png"
     device = "mps"
     c_puct = 1.5
+    c_base = 5000
+    c_puct_strategy = "dynamic"
+    fpu = -1
+    fpu_strategy = "fixed"
     filters = 256
     blocks = 15
     value_hidden = 256
@@ -356,6 +360,10 @@ def main() -> None:
         dirichlet_alpha=0.0,   # disable noise for deterministic evaluation
         dirichlet_epsilon=0.0,
         device=device,
+        c_base=c_base,
+        c_puct_strategy=c_puct_strategy,
+        fpu_value=fpu,
+        fpu_strategy=fpu_strategy 
     )
     mcts = MCTS(game, net, mcts_config)
 

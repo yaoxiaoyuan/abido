@@ -174,7 +174,7 @@ class PolicyValueNet(nn.Module):
         value = F.relu(self.value_fc1(value), inplace=True)
         value = torch.tanh(self.value_fc2(value)).squeeze(1)
 
-        return log_policy, value
+        return {"log_policy": log_policy, "value": value}
 
     # ------------------------------------------------------------------
     # Convenience helpers
@@ -187,7 +187,8 @@ class PolicyValueNet(nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            log_policy, value = self.forward(x)
+            outputs = self.forward(x)
+            log_policy, value = outputs["log_policy"], outputs["value"]
         return log_policy.exp(), value
 
     @property

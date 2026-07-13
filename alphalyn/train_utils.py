@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -104,22 +104,33 @@ def _add_game_specific_args(parser: argparse.ArgumentParser, game_name: str) -> 
 def _play_one_game(
     game: BoardGame,
     ai: AIPlayer,
-    net: PolicyValueNet,
-    temperature_threshold: int
+    temperature_threshold: int,
+    temperature: float = 1.0,
+    second_ai: Optional[AIPlayer] = None,
 ) -> Tuple[List[np.ndarray], List[np.ndarray], List[float]]:
     """Play one complete self-play game and collect training samples.
 
-    Returns
-    -------
-    boards : List[np.ndarray]
-        Board encoding at each move, shape ``(num_input_planes, H, W)``.
-    policies : List[np.ndarray]
-        MCTS visit-count policy at each move, shape ``(num_actions,)``.
-    values : List[float]
-        Final game outcome from each position's perspective (+1 / -1 / 0).
+    Parameters
+    ----------
+    game:
+        The board game instance to play on.
+    ai:
+        The AI player (with internal MCTS) that selects moves during self-play.
+    temperature_threshold:
+        Move count threshold for temperature annealing.  Moves before this
+        threshold use ``temperature``; moves after use temperature 0.0
+        (greedy / deterministic selection).
+    temperature:
+        Temperature used for moves before ``temperature_threshold`` is reached.
+        Once ``move_count >= temperature_threshold``, temperature drops to 0.0
+        (greedy selection).
+    second_ai:
+        Optional second AI player used for the opponent's turns.  When ``None``
+        (default) the same ``ai`` plays both sides.
     """
-    game.reset()
     ai.reset()
+    if second_ai:
+        second_ai.reset()
 
     move_history: List[Tuple[np.ndarray, np.ndarray, int, float]] = []
     # Each entry: (board_encoding, policy_vector, player_who_moved, q_values)
@@ -129,12 +140,18 @@ def _play_one_game(
 
     while not game.state.is_game_over:
         current_player = game.state.turn
+        
+        current_ai = ai
+        if second_ai is not None and current_player == game.PLAYER_SECOND:
+            current_ai = second_ai
 
         # Use exploratory temperature for early moves, greedy afterwards.
-        temperature = 1.0 if move_count < temperature_threshold else 0.0
-        action_probs = ai._mcts.get_action_probs(
+        if move_count > temperature_threshold:
+            temperature = 0.0
+
+        action_probs = current_ai._mcts.get_action_probs(
             temperature=temperature,
-            batch_size=ai.config.batch_size,
+            batch_size=current_ai.config.batch_size,
         )
 
         # Build full policy vector (zeros for illegal actions)
@@ -150,12 +167,14 @@ def _play_one_game(
         ).squeeze(0).numpy()  # (num_input_planes, H, W)
 
         # Select and apply action
-        action = ai._mcts.select_action(action_probs, greedy=(temperature == 0.0))
-        q_value = ai._mcts._root.mean_value
+        action = current_ai._mcts.select_action(action_probs, greedy=(temperature == 0.0))
+        q_value = current_ai._mcts._root.mean_value
         game.move(current_player, action)
 
         # AI observe the action to keep tree in sync
         ai.observe_action(action)
+        if second_ai:
+            second_ai.observe_action(action)
 
         move_history.append((board_encoding, policy_vector, current_player, q_value))
         move_count += 1
@@ -166,7 +185,8 @@ def _play_one_game(
     boards: List[np.ndarray] = []
     policies: List[np.ndarray] = []
     values: List[float] = []
-
+    q_values: List[float] = []
+    final_board = game.state.board.copy()
     for board_encoding, policy_vector, player_who_moved, q_value in move_history:
         if winner == game.RESULT_TIE:
             value = 0.0
@@ -177,7 +197,7 @@ def _play_one_game(
         boards.append(board_encoding)
         policies.append(policy_vector)
 
-        value = (value + q_value) / 2
+        q_values.append(q_value)
         values.append(value)
 
-    return boards, policies, values
+    return boards, policies, values, q_values, final_board

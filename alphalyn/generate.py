@@ -91,6 +91,8 @@ class GenerationConfig:
         MCTS configuration (num_simulations, c_puct, Dirichlet noise, etc.).
     ai_player:
         AIPlayer configuration (temperature, greedy, batch_size, etc.).
+    temperature:
+        Temperature used for moves before ``temperature_threshold`` is reached.
     temperature_threshold:
         Moves before this count use temperature=1.0 (exploratory); after use
         greedy (temperature=0.0).
@@ -113,6 +115,7 @@ class GenerationConfig:
     reload_interval: int = 4
     device: str = "cpu"
     ai_player: AIPlayerConfig = field(default_factory=AIPlayerConfig)
+    temperature: float = 1.0
     temperature_threshold: int = 30
     num_input_planes: int = 3
     num_filters: int = 128
@@ -210,6 +213,8 @@ def generate(config: GenerationConfig) -> None:
         all_boards: list[np.ndarray] = []
         all_policies: list[np.ndarray] = []
         all_values: list[float] = []
+        all_q_values: list[float] = []
+        all_final_boards: list[np.ndarray] = []
         game_times: list[float] = []
 
         for game_idx in range(config.games_per_iter):
@@ -228,17 +233,22 @@ def generate(config: GenerationConfig) -> None:
                     next_reload_iter += 1
 
             game_start = time.time()
-            boards, policies, values = _play_one_game(
+            game.reset()
+            boards, policies, values, q_values, final_board = _play_one_game(
                 game=game,
                 ai=ai,
-                net=net,
-                temperature_threshold=config.temperature_threshold
+                temperature_threshold=config.temperature_threshold,
+                temperature=config.temperature
             )
+
             game_elapsed = time.time() - game_start
 
             all_boards.extend(boards)
             all_policies.extend(policies)
             all_values.extend(values)
+            all_q_values.extend(q_values)
+            all_final_boards = all_final_boards + [final_board] * len(boards)
+
             game_times.append(game_elapsed)
             games_since_last_reload_check += 1
 
@@ -255,6 +265,8 @@ def generate(config: GenerationConfig) -> None:
             boards=np.array(all_boards, dtype=np.float32),
             policies=np.array(all_policies, dtype=np.float32),
             values=np.array(all_values, dtype=np.float32),
+            q_values=np.array(all_q_values, dtype=np.float32),
+            final_boards=np.array(all_final_boards, dtype=np.float32),
         )
 
         # Write per-worker DONE marker
@@ -312,6 +324,8 @@ def _parse_args() -> GenerationConfig:
                         help="Dirichlet noise weight (default: 0.25)")
     parser.add_argument("--mcts-batch", type=int, default=4,
                         help="MCTS inference batch size (default: 4)")
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Temperature for moves before the temperature threshold (default: 1.0)")
     parser.add_argument("--temp-threshold", type=int, default=30,
                         help="Moves before this use temperature=1.0; after use greedy (default: 30)")
     parser.add_argument("--playout-cap-random", type=float, default=0.0,
@@ -363,6 +377,7 @@ def _parse_args() -> GenerationConfig:
         reload_interval=args.reload_interval,
         device=args.device,
         ai_player=ai_config,
+        temperature=args.temperature,
         temperature_threshold=args.temp_threshold,
         num_filters=args.filters,
         num_residual_blocks=args.blocks,
