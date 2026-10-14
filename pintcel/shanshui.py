@@ -2052,15 +2052,160 @@ def figure(cv, rng, x, y, s, ink):
 
 
 def birds(cv, rng, x, y, s, n, ink):
-    """飞鸟 — the 人 character, written small."""
+    """飞鸟 — the 人 character, written small. A scatter, with no formation:
+    these are the sparrows and crows of a valley, and 雁 are a different
+    mark entirely (see geese below)."""
     for _ in range(n):
         bx = x + rng.uniform(-1.0, 1.0) * s * 6.0
         by = y + rng.uniform(-1.0, 1.0) * s * 3.0
         w = s * rng.uniform(0.7, 1.3)
         d = rng.uniform(0.25, 0.6)
-        brush_seg(cv, bx - w, by - w * d, bx, by, 0.8, 0.5, ink, 0.75)
+        # The width has to go up with the span. Left at a fixed 0.8/0.5 these
+        # grew in reach but not in weight, so on a large sheet they were
+        # hairline ticks rather than ink.
+        bw = max(0.55, w * 0.17)
+        brush_seg(cv, bx - w, by - w * d, bx, by, bw, bw * 0.62, ink, 0.75)
         brush_seg(cv, bx, by, bx + w, by - w * d * rng.uniform(0.7, 1.3),
-                  0.5, 0.8, ink, 0.75)
+                  bw * 0.62, bw, ink, 0.75)
+
+
+def goose(cv, x, y, s, ink, alpha, beat, tilt):
+    """One 雁. Two wings, each bent at the wrist, written from the body out.
+
+    No body stroke: both wings *start* at the body, so the ink accumulates
+    where they overlap and the heaviest point of the mark is the bird. The
+    bead at a shared endpoint is a defect when you are drawing one long
+    curve out of short capsules, and here it is exactly the thing wanted.
+
+    `beat` is where this bird is in the wingbeat, 1 fully raised through 0
+    (the long flat glide of a 雁, and the reason 一字 reads as geese at all)
+    to -1 pressed down. `tilt` rotates the whole mark: the span of a wing is
+    horizontal in the world, so on paper it stays near-horizontal whichever
+    way the formation runs, and only the viewpoint tips it.
+    """
+    ca, sa = math.cos(tilt), math.sin(tilt)
+    lift = beat * s * 0.46
+    # Thin. At s*0.15 the two wings met in a blob and every bird was a little
+    # dark slug: a mark this small has no room for a stroke that is a tenth of
+    # its own length wide, and the overlap at the body does the rest.
+    w = max(0.45, s * 0.075)
+    for side in (-1.0, 1.0):
+        # (along the span, up) -> screen, y down
+        # The wrist sits *above* the chord from shoulder to tip — the wing
+        # rises fast off the body and then flattens out. Bowed the other way
+        # it is a gull's kinked wing, which is the wrong bird.
+        ex, ey = side * s * 0.48, lift * 0.60
+        mx, my = x + ex * ca + ey * sa, y + ex * sa - ey * ca
+        ex, ey = side * s, lift
+        tx, ty = x + ex * ca + ey * sa, y + ex * sa - ey * ca
+        # 内实外虚 — loaded at the shoulder, lifting off at the tip.
+        brush_seg(cv, x, y, mx, my, w, w * 0.74, ink, alpha)
+        brush_seg(cv, mx, my, tx, ty, w * 0.74, w * 0.22, ink, alpha)
+
+
+def geese(cv, rng, occ, W, H, S, ink, pale):
+    """雁阵 — a formation of 雁, and the reason it is not `birds()`.
+
+    A 飞鸟 scatter and a 雁阵 are the same bird drawn twice over, and what
+    separates them is entirely the arrangement:
+
+      * **人字 or 一字.** The formation is the subject. One lead bird, then
+        two arms trailing *behind* it, and the arms are never the same
+        length — a symmetric V is a logo, not a flock.
+      * **它渐远 — the line recedes.** Every bird along an arm is smaller
+        and paler than the one before it (or larger, if the flock is coming
+        toward you: the lead is the far end as often as the near one). Size
+        grading along the formation is the single cue that says these birds
+        are at different distances, and without it a V of equal marks reads
+        as a decal.
+      * **One wingbeat, travelling.** The beat is a *wave* along the arms,
+        `sin(ph0 + i·lag)`, not a fresh random angle per bird. Independent
+        wings make eight birds; a phase lag makes one flock. This is the
+        detail that costs one line and does most of the work.
+      * **留白 is where it goes.** The flock is placed by scoring candidate
+        patches of sky against the occupancy map and taking the emptiest,
+        which is both how a painter uses a 雁阵 — to measure an expanse of
+        nothing — and the only way to keep it off the mountains.
+    """
+    one_line = rng.random() < 0.32            # 一字 rather than 人字
+    # Mostly horizontal, and more often descending than not: these are 归雁.
+    ang = rng.uniform(-0.34, 0.20) + (0.0 if rng.random() < 0.5 else math.pi)
+    back = ang + math.pi
+    half = 0.0 if one_line else rng.uniform(0.30, 0.54)
+    s0 = S * rng.uniform(0.013, 0.023)
+    # Spacing is measured in *birds*, not in sheet: drawn from the sheet it
+    # came out at 1.4 wingspans on a large lead bird and the flock collided
+    # with itself.
+    gap = s0 * rng.uniform(2.2, 3.4)
+    # Five is about the floor for a formation. With three or four the arms
+    # are too short to be arms and what you have painted is a scatter of
+    # birds that happens to lean — i.e. `birds()`, drawn worse.
+    n1 = rng.randint(3, 5)
+    n2 = 0 if one_line else max(1, n1 - rng.randint(0, 2))
+    if one_line:
+        n1 += rng.randint(1, 3)
+    deep = rng.random() < 0.5                 # is the lead the far end?
+    ph0 = rng.uniform(0.0, math.pi * 2.0)
+    lag = rng.uniform(0.5, 1.15) * (1.0 if rng.random() < 0.5 else -1.0)
+    amp = rng.uniform(0.52, 1.0)
+    base_tilt = rng.gauss(0.0, 0.10) + math.sin(ang) * 0.30
+
+    flock = []                                # (ex, ey, s, beat, tilt, f)
+    nmax = max(n1, n2)
+    px, py = math.cos(ang + 1.57), math.sin(ang + 1.57)
+    for arm, cnt in ((1.0, n1), (-1.0, n2)):
+        a = back + arm * half
+        ca, sa = math.cos(a), math.sin(a)
+        d = 0.0
+        for i in range(cnt + 1):
+            dp = (i / nmax) if nmax else 0.0
+            f = (1.0 - 0.44 * dp) if deep else (0.56 + 0.44 * dp)
+            if i:
+                # 远则密 — the step shrinks with the bird. Perspective
+                # compresses the *spacing* as hard as it compresses the
+                # wingspan, and stepping by a constant gap while grading the
+                # sizes gave a line of birds that got smaller without going
+                # anywhere. Accumulating the step is what makes the arm read
+                # as a line going away rather than as a row of sizes.
+                d += gap * f * rng.uniform(0.86, 1.14)
+            elif arm < 0.0:
+                continue                      # the lead bird, drawn once
+            j = rng.gauss(0.0, gap * 0.13)
+            flock.append((ca * d + px * j, sa * d + py * j,
+                          s0 * f * rng.uniform(0.93, 1.07),
+                          amp * math.sin(ph0 + i * lag),
+                          base_tilt + rng.gauss(0.0, 0.07), f))
+
+    # ---- where: the emptiest patch of sky that will hold it --------------
+    xs = [p[0] for p in flock]
+    ys = [p[1] for p in flock]
+    bw = max(xs) - min(xs) + s0 * 2.4
+    bh = max(ys) - min(ys) + s0 * 2.4
+    ox, oy = min(xs) - s0 * 1.2, min(ys) - s0 * 1.2
+    best, best_sc = None, None
+    for _ in range(26):
+        ax = rng.uniform(W * 0.07, max(W * 0.08, W * 0.93 - bw))
+        ay = rng.uniform(H * 0.05, max(H * 0.06, H * 0.36 - bh))
+        sc = occ.overlap(ax, ay, ax + bw, ay + bh, S * 0.012)
+        # 不碍主峰, and 三分: a flock on the centre line halves the sheet, and
+        # one shoved into a corner is an afterthought. The cost is least at
+        # about a quarter of the way in from either side, which is where a
+        # painter puts it. Rewarding "away from centre" alone drove every
+        # flock onto the right margin, because on empty paper it was the only
+        # term in the score.
+        off = abs((ax + bw * 0.5) / W - 0.5) - 0.26
+        sc += off * off * S * 24.0
+        if best_sc is None or sc < best_sc:
+            best, best_sc = (ax, ay), sc
+    if best is None or best_sc > S * 9.0:
+        return 0                              # no empty sky; paint no geese
+    ax, ay = best[0] - ox, best[1] - oy
+
+    for ex, ey, s, beat, tilt, f in flock:
+        goose(cv, ax + ex, ay + ey, s, mix(pale, ink, 0.30 + 0.70 * f),
+              (0.34 + 0.46 * f), beat, tilt)
+        occ.add(ax + ex, ay + ey, s * 0.9)
+    return len(flock)
 
 
 # --------------------------------------------------------------------------
@@ -2076,7 +2221,7 @@ SCENES = {
         # cone, however much fBm you hang on its flanks
         peaks=(2, 3), spire=(0.70, 1.42), mid=(1, 2), near=(1, 2),
         water=(0.03, 0.10), fall=0.8, boat=0.25, bridge=0.35,
-        trees=(2, 4), near_trees=(1, 3), mist=0.95, dens=0.7,
+        trees=(2, 4), near_trees=(1, 3), mist=0.95, dens=0.7, geese=0.20,
     ),
     "深远": dict(
         cn="深远", en="deep distance — ridge behind ridge",
@@ -2084,7 +2229,7 @@ SCENES = {
         main_h=(0.28, 0.40), main_y=(0.58, 0.70), main_w=(0.65, 1.05),
         peaks=(2, 4), spire=(0.55, 1.3), mid=(1, 3), near=(1, 2),
         water=(0.08, 0.18), fall=0.4, boat=0.4, bridge=0.4,
-        trees=(3, 6), near_trees=(1, 3), mist=1.0, dens=0.9,
+        trees=(3, 6), near_trees=(1, 3), mist=1.0, dens=0.9, geese=0.34,
     ),
     "平远": dict(
         cn="平远", en="level distance — Ni Zan's empty water",
@@ -2092,7 +2237,7 @@ SCENES = {
         main_h=(0.13, 0.22), main_y=(0.46, 0.56), main_w=(0.55, 1.00),
         peaks=(1, 3), spire=(0.5, 1.0), mid=(0, 1), near=(1, 2),
         water=(0.24, 0.38), fall=0.0, boat=0.65, bridge=0.15,
-        trees=(2, 4), near_trees=(2, 4), mist=0.7, dens=1.3,
+        trees=(2, 4), near_trees=(2, 4), mist=0.7, dens=1.3, geese=0.52,
     ),
 }
 
@@ -2563,7 +2708,14 @@ def compose(cv, rng, scene_key, style_key, cun_key):
             bx0, by0, bx1, by1 = span_ok
             bridge(cv, rng, bx0, by0 + 3.0, bx1, by1 + 3.0, ink_n)
 
-    if rng.random() < 0.5:
+    # 雁阵 or 飞鸟, never both: two unrelated flocks in one sky is not a
+    # busier painting, it is a painting nobody arranged. 雁 want room — the
+    # flock is the mark that measures an expanse of empty paper — so the
+    # chance of them rises with the amount of sky the composition leaves,
+    # and on a 平远 sheet of open water they are the commoner choice.
+    if rng.random() < sc["geese"]:
+        geese(cv, rng, occ, W, H, S, ink_d, I("qing"))
+    elif rng.random() < 0.5:
         birds(cv, rng, W * rng.uniform(0.25, 0.75), H * rng.uniform(0.10, 0.26),
               4.0 * scale, rng.randint(2, 5), ink_d)
 
