@@ -1642,7 +1642,7 @@ def _twig(cv, rng, x, y, a, L, w, ink, alpha, depth, tips, claw=0.0):
     else:
         brush_path(cv, pts, w, w * 0.45, ink, alpha)
     if depth <= 0 or L < 5.0:
-        tips.append((pts[-1][0], pts[-1][1], a, L))
+        tips.append((pts[-1][0], pts[-1][1], a, L, pts))
         return
     nb = rng.randint(2, 3)
     for j in range(nb):
@@ -1652,7 +1652,7 @@ def _twig(cv, rng, x, y, a, L, w, ink, alpha, depth, tips, claw=0.0):
         _twig(cv, rng, pts[i][0], pts[i][1], a + da,
               L * rng.uniform(0.44, 0.72), max(0.55, w * 0.55), ink,
               alpha, depth - 1, tips, claw)
-    tips.append((pts[-1][0], pts[-1][1], a, L))
+    tips.append((pts[-1][0], pts[-1][1], a, L, pts))
 
 
 def _taper(cv, pts, w0, w1, color, alpha):
@@ -1798,17 +1798,51 @@ def tree(cv, rng, x, y, h, kind, ink, leaf, scale=1.0, alpha=1.0):
               h * rng.uniform(0.20, 0.40), max(0.7, w * 0.62), ink, alpha,
               deep, tips, claw)
 
+    def along(bp, u, lat):
+        """A point *on* a branch — `u` of the way along it, `lat` pixels to
+        one side of it.
+
+        Foliage used to be scattered around a branch's tip by a fraction of
+        the branch's own length, in a direction that had nothing to do with
+        the branch: `cx = tx + uniform(-0.9, 0.9) * L`. On a 300 px tree that
+        throws a cluster up to 90 px into clear air, so the crowns came out as
+        clouds of leaves floating beside bare twigs — a fan hanging on
+        nothing, with the branch that should carry it two inches away. The
+        offsets were small enough to look like a jitter in the source and are
+        the single most visible defect in the tree.
+
+        Foliage grows *from* the branch, so a cluster's position has one
+        degree of freedom — how far out along the twig it sits — plus a lean
+        to either side that is bounded by the size of the cluster itself, not
+        by the length of the branch.
+        """
+        n = len(bp) - 1
+        t = min(max(u, 0.0), 1.0) * n
+        i = min(n - 1, int(t))
+        f = t - i
+        ax, ay = bp[i]
+        bx, by = bp[i + 1]
+        dx, dy = bx - ax, by - ay
+        d = math.hypot(dx, dy) or 1.0
+        return (ax + dx * f - dy / d * lat, ay + dy * f + dx / d * lat)
+
     leaf2 = mix(leaf, I("jiao"), 0.45)    # 浓淡 — two tones of foliage
     if kind == "松":                      # 松针 — needle fans on every tip
-        for tx, ty, a, L in tips:
+        for tx, ty, a, L, bp in tips:
             # 松针 is a cluster the size of a thumbnail, repeated. Drawn big
             # and sparse — a dozen long rays off one centre — it comes out a
             # palm frond, which was the one tree in the repertoire that
             # always looked wrong.
-            for _ in range(rng.randint(3, 6)):
-                cx = tx + rng.uniform(-0.55, 0.55) * L
-                cy = ty + rng.uniform(-0.55, 0.40) * L
-                r = h * rng.uniform(0.042, 0.085)
+            # A fan whose centre is within its own radius of the branch
+            # overlaps the branch, so that — and not any fraction of `L` — is
+            # what bounds the lean. The crown's mass then has to come from the
+            # number of fans and their size, which is where it should come
+            # from anyway: anchoring them without putting that mass back left
+            # the pine a set of bare twigs with moss growing on them.
+            for _ in range(rng.randint(6, 9)):
+                r = h * rng.uniform(0.046, 0.092)
+                cx, cy = along(bp, rng.uniform(0.22, 1.06),
+                               rng.uniform(-1.0, 1.0) * r)
                 a0 = rng.uniform(-2.9, -0.3)       # fans open upward
                 col = leaf if rng.random() < 0.6 else leaf2
                 for q in range(rng.randint(9, 15)):
@@ -1823,16 +1857,23 @@ def tree(cv, rng, x, y, h, kind, ink, leaf, scale=1.0, alpha=1.0):
         # like a currant bush. So each cluster picks a lean and lays tapered
         # dabs along it, with a handful of peppercorns mixed in — the same
         # distinction index.html draws between `blob` and a circle.
-        for tx, ty, a, L in tips:
-            for _ in range(rng.randint(3, 6)):
-                cx = tx + rng.uniform(-0.9, 0.9) * L
-                cy = ty + rng.uniform(-0.9, 0.5) * L
+        for tx, ty, a, L, bp in tips:
+            for _ in range(rng.randint(6, 9)):
+                # A cluster has a size of its own, and it is a fraction of the
+                # *tree* — ±4 px of dab scatter was the whole of it before,
+                # which is why the crown needed the clusters themselves thrown
+                # about to look like anything. The lean off the branch is
+                # bounded by the same radius, so the cluster always covers the
+                # twig it grows on.
+                cr = h * rng.uniform(0.026, 0.055)
+                cx, cy = along(bp, rng.uniform(0.22, 1.06),
+                               rng.uniform(-1.0, 1.0) * cr)
                 col = leaf if rng.random() < 0.6 else leaf2
                 lean = rng.uniform(-0.6, 0.6)
                 pepper = rng.random() < 0.3
-                for _ in range(rng.randint(5, 11)):
-                    px = cx + rng.uniform(-4.2, 4.2) * scale
-                    py = cy + rng.uniform(-3.4, 3.4) * scale
+                for _ in range(rng.randint(7, 14)):
+                    px = cx + rng.uniform(-1.0, 1.0) * cr
+                    py = cy + rng.uniform(-0.82, 0.82) * cr
                     al = alpha * rng.uniform(0.35, 0.85)
                     if pepper:
                         disc(cv, px, py, rng.uniform(1.2, 2.4) * scale, col,
@@ -1853,14 +1894,18 @@ def tree(cv, rng, x, y, h, kind, ink, leaf, scale=1.0, alpha=1.0):
         # sweep they pile into a mop with no inside and no edge — which is
         # exactly what the willow in this repertoire looked like.
         wind = rng.uniform(-0.9, 0.9)
-        for tx, ty, a, L in tips:
-            k = rng.randint(3, 6)
+        for tx, ty, a, L, bp in tips:
+            k = rng.randint(4, 7)
             for q in range(k):
-                u = (q + 0.5) / k - 0.5          # position along the branch
+                v = (q + 0.5) / k               # position along the branch
                 d = (h * rng.uniform(0.20, 0.34)
-                     * (0.68 + 0.32 * (1.0 - 2.0 * abs(u))))
-                sx = tx + math.cos(a) * L * u * 0.9
-                sy = ty + math.sin(a) * L * u * 0.9
+                     * (0.68 + 0.32 * (1.0 - 2.0 * abs(v - 0.5))))
+                # Off the branch itself, not off the chord from its tip: a
+                # branch is a bent curve and its bearing `a` is the bearing it
+                # *left* at, so stepping back along that bearing walked the
+                # strands out into the air beside the tree. The curtains were
+                # hanging from nothing.
+                sx, sy = along(bp, v, rng.uniform(-1.5, 1.5) * scale)
                 sw = wind + rng.uniform(-0.30, 0.30)
                 st = bezier((sx, sy),
                             (sx + sw * d * 0.10, sy + d * 0.40),
