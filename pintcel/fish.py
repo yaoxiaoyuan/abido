@@ -2242,7 +2242,7 @@ SEAL_WORDS = ["知鱼", "濠上", "鱼乐", "清波", "墨缘", "闲心", "写�
 
 def vocabulary():
     """Every character this painter can write — tools/extract_glyphs.py bakes
-    exactly these into animal_font.py."""
+    exactly these into fish_font.py."""
     words = (TITLE_A + TITLE_B + ACTION + SEAL_WORDS
              + [v["cn"] for v in SCENES.values()]
              + [v["cn"] for v in SPECIES.values()]

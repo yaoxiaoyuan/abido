@@ -53,7 +53,7 @@ PAINTERS = {
     "gongbi":   (gongbi,   "工笔花卉", (1000, 1360)),
     "shanshui": (shanshui, "山水",     (1000, 1400)),
     "bamboo":   (bamboo,   "墨竹",     (900, 1300)),
-    "fish":   (fish,   "游鱼",     (900, 1200)),
+    "fish":     (fish,   "游鱼",     (900, 1200)),
     "pavilion": (pavilion, "亭景",     (900, 1200)),
     "orchid":   (orchid,   "墨兰",     (900, 1300)),
     "grape":    (grape,    "墨葡萄",   (900, 1300)),
