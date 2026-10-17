@@ -212,11 +212,41 @@ def _slope(cv, rng, prj, m0, m1, Rin, Zin, Rout, Ze, up, bow, ink, pale,
         pts = _ray(prj, ix, iy, Zin, ex, ey, ez, 9, bend, t0)
         # 染 — the wash, laid *along* the courses, so the fill and the tile
         # lines are the same family of curves and cannot disagree.
+        #
+        # And laid in three passes, not one. At a single flat value the roof
+        # came out a grey disc with a comb of lines on it — the largest and
+        # most conspicuous shape in the picture, and the only one with no
+        # 墨色 in it at all. A tiled roof is not one tone: it is pale where it
+        # turns toward the sky at the ridge and it piles up at the eave, where
+        # the courses crowd together, the tiles double, and the overhang is in
+        # its own shade. Three passes over the outer half of the same curve
+        # cost nothing (the curve is already computed) and give 1 : 1.5 : 2
+        # from ridge to eave, which is what makes the surface turn.
         w = max(0.8, Rout * 0.034)
-        brush_path(cv, pts, w, w * 1.2, pale, (0.075 if lit else 0.125))
+        a0 = 0.108 if lit else 0.190
+        brush_path(cv, pts, w, w * 1.2, pale, a0)
+        k = len(pts) - 1
+        brush_path(cv, pts[k // 2:], w * 1.05, w * 1.25, pale, a0 * 0.52)
+        brush_path(cv, pts[int(k * 0.76):], w * 1.1, w * 1.3, pale, a0 * 0.44)
+        # 顶心 — and close the hole that `t0` leaves.
+        #
+        # Starting the courses a fifth of the way out stops the sunburst, and
+        # the cost of it was a *lens of bare paper either side of the finial*
+        # — at the top of the largest shape in the picture, which is the one
+        # place on the sheet where white reads as a hole rather than as 留白.
+        # A disc over it is wrong twice over (the apex is the highest point of
+        # the roof, so a disc centred there hangs in the sky above the ridge,
+        # and it came out a moon behind the 宝顶). The cap has to lie *on the
+        # surface*, which means it has to be drawn the way the rest of the
+        # surface is: along the courses. Every third one, from just clear of
+        # the point — the finial's own base covers the last few pixels — at
+        # half strength, so a third as many strokes converging at a third of
+        # the weight never piles up.
+        if t0 > 0.0 and j % 3 == 0:
+            cap = _ray(prj, ix, iy, Zin, ex, ey, ez, 16, bend, 0.0)
+            brush_path(cv, cap[1:4], w * 0.80, w * 0.95, pale, a0 * 0.55)
         if tile and j % 4 == 2 and 0 < j < nray:
-            brush_path(cv, pts, max(0.5, Rout * 0.010),
-                       max(0.6, Rout * 0.015), ink,
+            brush_path(cv, pts, u * 0.85, u * 1.05, ink,
                        (0.26 if lit else 0.36) * rng.uniform(0.85, 1.1))
 
 
@@ -230,7 +260,17 @@ def _eave_line(cv, rng, prj, m0, m1, Rout, Ze, up, bow, ink, w, drip=True):
     """
     pts = [prj(*_eave(m0, m1, Rout, Ze, up, bow, j / 22.0))
            for j in range(23)]
-    brush_path(cv, pts, w, w, ink, 0.95)
+    # 中实两端虚 — and in two halves, because a long curve of one width is the
+    # single most mechanical mark a brush can be asked to make. The eave is
+    # the heaviest line in the building and it was also the most ruled: a
+    # black ribbon of exactly constant thickness, laid over a landscape in
+    # which nothing else has a constant anything. Loaded in the middle and
+    # lifting toward each corner, the same curve reads as one pull of a
+    # brush, and the 翘角 that continues off either end stops looking welded
+    # on.
+    h = len(pts) // 2
+    brush_path(cv, pts[:h + 1], w * 0.76, w * 1.10, ink, 0.95)
+    brush_path(cv, pts[h:], w * 1.10, w * 0.76, ink, 0.95)
     if not drip:
         return
     step = max(2, int(len(pts) / max(3.0, Rout * 0.13)))
@@ -268,7 +308,7 @@ def _finial(cv, rng, prj, Za, R, ink, pale):
               max(0.7, s * 0.34), max(0.4, s * 0.14), ink, 0.88)
 
 
-def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow):
+def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow, u, lightm):
     """攒尖顶 — the whole roof, drawn back to front.
 
     Only the faces turned toward the viewer are drawn at all. A convex
@@ -282,7 +322,7 @@ def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow):
     Ze = Zc + r * 0.05
     up = Rout * 0.115                          # 起翘 at the corners
     Za = Zc + r * (1.00 if tiers == 1 else 1.52)
-    lw = max(1.1, r * 0.040)
+    lw = u * 2.45                              # 檐口, the heaviest line
 
     rings = []
     if tiers == 1:
@@ -327,10 +367,11 @@ def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow):
                 a, b = prj(xx, yy, z0), prj(xx, yy, z1)
                 brush_seg(cv, a[0], a[1], b[0], b[1], lw * 0.6, lw * 0.5,
                           ink, 0.68)
-            for u in (0.34, 0.66):               # 格窗 — a mullion or two
-                a = prj(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, z0)
-                b = prj(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, z1)
-                brush_seg(cv, a[0], a[1], b[0], b[1], 0.6, 0.6, pale, 0.34)
+            for t in (0.34, 0.66):               # 格窗 — a mullion or two
+                a = prj(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z0)
+                b = prj(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z1)
+                brush_seg(cv, a[0], a[1], b[0], b[1], u * 0.85, u * 0.85,
+                          pale, 0.34)
 
     for ri, (Rin, Zin, Rout_, Ze_, up_, bend, tile) in enumerate(rings):
         if ri == 1:
@@ -346,7 +387,7 @@ def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow):
         faces.sort(reverse=True)               # far faces first
         nray = max(8, int(Rout_ * 0.34))
         for _, m0, m1, mm in faces:
-            lit = prj.facing(mm) > 0.35 or math.cos(mm) > 0.2
+            lit = prj.facing(mm) > 0.35 or math.cos(mm - lightm) > 0.2
             _slope(cv, rng, prj, m0, m1, Rin, Zin, Rout_, Ze_, up_, bow,
                    ink, pale, lit, nray, bend, tile)
         for _, m0, m1, mm in faces:
@@ -370,7 +411,43 @@ def roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow):
 # 木作 — the carpentry below the eaves
 # --------------------------------------------------------------------------
 
-def _frieze(cv, rng, prj, m0, m1, r, Zb, ink, depth):
+def unit(r):
+    """笔 — the one unit of line weight in the building, and the reason the
+    whole of it looks drawn by one hand.
+
+    This arrived late and it was the single biggest thing wrong with the
+    module. The roof, the columns and the finial were all sized off `r`; the
+    beams, the 挂落, the railing, the platform, the steps, the plaque and the
+    figure were all pinned at literal widths between 0.5 and 1.1 px, written
+    while the sheet happened to be 600 wide. Nothing looks wrong about that
+    at 600. At the default 900 the near columns are nine pixels of near-black
+    and the 棂条 beside them are still 0.55, and at 1400 the ratio is 12:1 —
+    so the building stops being a building and becomes *a heavy black roof
+    resting on a wire diagram*, against a landscape every mark of which
+    scales. A painter does not change brushes between the eave and the
+    railing; the hand that drew one drew the other, and the weights it leaves
+    are a short ladder with a fixed spacing.
+
+    So: one unit, and every weight in the carpentry is a multiple of it. The
+    ladder, top to bottom, is
+
+        檐口 2.45   the eave — the heaviest line in the picture
+        柱   4.5    (a column is a mass, not a line, and gets its own figure)
+        额枋 1.7    the beam
+        台基 1.6    the near edge of the platform
+        寻杖 1.35   the handrail
+        雀替 1.05   the brace
+        棂条 0.78   the balusters
+        铺地 0.7    the paving course
+
+    The floor matters as much as the slope: below about half a pixel
+    `brush_seg`'s falloff is most of the stroke, so a line asked to be 0.3 px
+    wide is not a fine line, it is a grey smudge in the shape of a line.
+    """
+    return max(0.58, r * 0.0165)
+
+
+def _frieze(cv, rng, prj, m0, m1, r, Zb, ink, depth, u):
     """挂落 — the fretwork that hangs under the beam of each bay.
 
     A 亭 is a roof on posts and nothing else, so the only ornament it owns
@@ -395,10 +472,10 @@ def _frieze(cv, rng, prj, m0, m1, r, Zb, ink, depth):
         a = prj(bx, by, Zb - depth * 1.35)
         b = prj(bx + dx * f * 0.42, by + dy * f * 0.42, Zb - depth * 0.42)
         c = prj(bx + dx * f, by + dy * f, Zb)
-        brush_path(cv, [a, b, c], 0.9, 0.7, ink, 0.60)
+        brush_path(cv, [a, b, c], u * 1.05, u * 0.72, ink, 0.60)
 
 
-def _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench):
+def _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench, u):
     """栏杆 — 寻杖 on top, 地枋 at the foot, 望柱 at the ends, 棂条 between.
 
     The railing is where the scale of the building lives. A roof can be any
@@ -416,8 +493,14 @@ def _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench):
     k_al = 1.0 if front else 0.20
     a0, a1 = prj(x0, y0, zt), prj(x1, y1, zt)
     b0, b1 = prj(x0, y0, zb), prj(x1, y1, zb)
-    brush_seg(cv, a0[0], a0[1], a1[0], a1[1], 0.9, 0.9, ink, 0.82 * k_al)
-    brush_seg(cv, b0[0], b0[1], b1[0], b1[1], 0.75, 0.75, ink, 0.66 * k_al)
+    # 寻杖 is a round timber and it swells a little along its length; 地枋 is
+    # a flat plank and does not. Two lines of the same length and the same
+    # width, parallel, are a pair of rails on a drawing — the taper is what
+    # makes the upper one the one you would put your hand on.
+    brush_seg(cv, a0[0], a0[1], a1[0], a1[1], u * 1.45, u * 1.18,
+              ink, 0.80 * k_al)
+    brush_seg(cv, b0[0], b0[1], b1[0], b1[1], u * 1.0, u * 1.0,
+              ink, 0.62 * k_al)
     # 棂条 — a full comb on the near bays, and two on the far ones. A quarter
     # weight is enough to subdue two long lines but not a comb of them: at the
     # default sheet size the far railings put five uprights and a plank across
@@ -430,10 +513,11 @@ def _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench):
     # indicated with a post or two and left there.
     k = (4 if r < 70 else 5) if front else 3
     for j in range(1, k):
-        u = j / float(k)
-        p = prj(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, zt)
-        q = prj(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, zb)
-        brush_seg(cv, p[0], p[1], q[0], q[1], 0.55, 0.55, ink, 0.44 * k_al)
+        t = j / float(k)
+        p = prj(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, zt)
+        q = prj(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, zb)
+        brush_seg(cv, p[0], p[1], q[0], q[1], u * 0.78, u * 0.78,
+                  ink, 0.36 * k_al)
     if bench and front:
         # 座凳栏杆 — the rail doubles as a bench, which is what a 亭 is for.
         # One plank, parallel to the rail and set in from it; the first
@@ -444,10 +528,11 @@ def _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench):
         # is almost invisible; hence `front` above.
         d0 = prj(x0 * 0.78, y0 * 0.78, zt * 0.80)
         d1 = prj(x1 * 0.78, y1 * 0.78, zt * 0.80)
-        brush_seg(cv, d0[0], d0[1], d1[0], d1[1], 0.8, 0.8, pale, 0.52 * k_al)
+        brush_seg(cv, d0[0], d0[1], d1[0], d1[1], u * 1.0, u * 1.0,
+                  pale, 0.52 * k_al)
 
 
-def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
+def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at, u, lightm):
     """台基 — the stone platform, and 踏步 up to it.
 
     Nothing in this building touches the ground except the platform, and the
@@ -465,7 +550,7 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
     # in air, and the interior goes back to being a crate however carefully
     # those lines are weighted. Over a surface they read as marks *on* a
     # floor. Lighter than the skirt below it, because it faces the sky.
-    fill_contours(cv, [top], pale, 0.090)
+    fill_contours(cv, [top], pale, 0.130)
     # The outline of the platform, edge by edge rather than as one closed
     # path: the far edges are behind the building and have to be pale, or
     # the floor reads as the top of a glass box. Drawn at one weight all
@@ -475,13 +560,14 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
         a, b = top[i], top[(i + 1) % n]
         mm = rot + i * TAU / n + math.pi / n
         near = prj.facing(mm) > 0.0
-        brush_seg(cv, a[0], a[1], b[0], b[1], 1.0 if near else 0.7,
-                  1.0 if near else 0.7, ink, 0.75 if near else 0.22)
+        w = u * (1.6 if near else 0.95)
+        brush_seg(cv, a[0], a[1], b[0], b[1], w, w,
+                  ink, 0.75 if near else 0.22)
     # 铺地 — the paving. A concentric course, never chords: chords through
     # the middle of the floor are the diagonals of a box and the eye reads
     # them as such immediately.
     inner = [prj(x * 0.74, y * 0.74, 0.0) for _, x, y in ring]
-    brush_path(cv, inner + inner[:1], 0.5, 0.5, pale, 0.26)
+    brush_path(cv, inner + inner[:1], u * 0.7, u * 0.7, pale, 0.26)
     # the front skirt: only the edges whose outward normal faces the viewer
     for i in range(n):
         m0 = rot + i * TAU / n
@@ -492,21 +578,41 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
         x1, y1 = math.cos(m0 + TAU / n) * Rb, math.sin(m0 + TAU / n) * Rb
         a, b = prj(x0, y0, 0.0), prj(x1, y1, 0.0)
         c, d = prj(x0, y0, -th), prj(x1, y1, -th)
-        # The face itself, in the lightest tone the paper will hold. Outline
-        # alone was enough while the 亭 stood on bare paper; on a washed
-        # hillside an outlined slab is a slab of glass, and the stair laid
-        # over it read as a wireframe lying in the grass. A stone needs a
-        # body — and it has to stay lighter than the stair's own wash, or the
-        # two merge back into one flat shape.
+        # The face itself. Outline alone was enough while the 亭 stood on bare
+        # paper; on a washed hillside an outlined slab is a slab of glass, and
+        # the stair laid over it read as a wireframe lying in the grass. A
+        # stone needs a body.
+        #
+        # It needed more of one than it had. At one flat 0.165 over paper the
+        # module had already given back (§_reserve), the 台基 came out *whiter
+        # than the hillside it stands on* — a bright box with hairlines round
+        # it, which is the one shape in the picture that looks printed. Two
+        # things fix it and neither is simply more ink:
+        #
+        # 面有向背 — the faces of a plinth are at different angles to the
+        # light and a stone with two tones on it is a stone, while a stone
+        # with one is a card. `lightm` is where the light comes from and it is
+        # the same bearing the roof is shaded by, so the building agrees with
+        # itself.
+        #
+        # 下重上轻 — and the wash runs heavier toward the foot. A plinth is
+        # dirty where the ground splashes it and it is in its own shadow
+        # there, and the gradient is also what stops the bottom edge being a
+        # ruled line with paper on both sides of it.
+        sh = 0.5 - 0.5 * math.cos(mm - lightm)        # 0 lit, 1 in shade
+        al = 0.215 + 0.215 * sh
         ns = max(6, int(abs(b[0] - a[0]) / 1.4))
         for t in range(ns + 1):
             v = t / float(ns)
             p = (a[0] + (b[0] - a[0]) * v, a[1] + (b[1] - a[1]) * v)
             q = (c[0] + (d[0] - c[0]) * v, c[1] + (d[1] - c[1]) * v)
-            brush_seg(cv, p[0], p[1], q[0], q[1], 0.8, 0.8, pale, 0.165)
-        brush_seg(cv, c[0], c[1], d[0], d[1], 1.1, 1.1, ink, 0.80)
-        brush_seg(cv, a[0], a[1], c[0], c[1], 0.8, 0.8, ink, 0.62)
-        brush_seg(cv, b[0], b[1], d[0], d[1], 0.8, 0.8, ink, 0.62)
+            brush_seg(cv, p[0], p[1], q[0], q[1], u * 1.0, u * 1.0, pale, al)
+            mz = (p[0] + (q[0] - p[0]) * 0.52, p[1] + (q[1] - p[1]) * 0.52)
+            brush_seg(cv, mz[0], mz[1], q[0], q[1], u * 1.0, u * 1.0,
+                      pale, al * 0.62)
+        brush_seg(cv, c[0], c[1], d[0], d[1], u * 1.9, u * 1.9, ink, 0.80)
+        brush_seg(cv, a[0], a[1], c[0], c[1], u * 1.1, u * 1.1, ink, 0.62)
+        brush_seg(cv, b[0], b[1], d[0], d[1], u * 1.1, u * 1.1, ink, 0.62)
         # 石纹 — a few courses of stone, and a dry scrub for the shadow. Not
         # on the face the stair comes down: in oblique projection a flight
         # descending in front of a wall always lands on that wall's screen
@@ -520,7 +626,7 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
             p = prj(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z)
             q = prj(x0 + (x1 - x0) * min(1.0, t + rng.uniform(0.15, 0.45)),
                     y0 + (y1 - y0) * min(1.0, t + rng.uniform(0.15, 0.45)), z)
-            brush_seg(cv, p[0], p[1], q[0], q[1], 0.6, 0.5, pale,
+            brush_seg(cv, p[0], p[1], q[0], q[1], u * 0.85, u * 0.7, pale,
                       rng.uniform(0.25, 0.5))
     if steps_at is None:
         return
@@ -543,6 +649,7 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
     cx, cy = math.cos(mm), math.sin(mm)
     nst = 3
     run = th * 0.46
+    lu = u                      # `P` below takes a step fraction called `u`
 
     def P(u, k, z):
         # A flight of steps is wider at the bottom than at the top, and that
@@ -562,22 +669,22 @@ def _base(cv, rng, prj, n, rot, r, ink, pale, th, steps_at):
             v = t / float(ns)
             p = (a0[0] + (b0[0] - a0[0]) * v, a0[1] + (b0[1] - a0[1]) * v)
             q = (a1[0] + (b1[0] - a1[0]) * v, a1[1] + (b1[1] - a1[1]) * v)
-            brush_seg(cv, p[0], p[1], q[0], q[1], 0.7, 0.7, pale, al)
+            brush_seg(cv, p[0], p[1], q[0], q[1], lu, lu, pale, al)
 
     for s in range(1, nst + 1):
         u0, u1 = (s - 1) / float(nst), s / float(nst)
         z, zup = -th * s / nst, -th * (s - 1) / nst
-        wash(u0, zup, u0, z, 0.30)                  # the riser, in shadow
-        wash(u0, z, u1, z, 0.17)                    # the tread, in light
+        wash(u0, zup, u0, z, 0.56)                  # the riser, in shadow
+        wash(u0, z, u1, z, 0.30)                    # the tread, in light
     for s in range(1, nst + 1):                     # the nosings
-        u = s / float(nst)
+        v = s / float(nst)
         z = -th * s / nst
-        ln(P(u, -1.0, z), P(u, 1.0, z), 0.9, 0.76 if s == nst else 0.58)
+        ln(P(v, -1.0, z), P(v, 1.0, z), lu * 1.3, 0.76 if s == nst else 0.58)
     for k in (-1.0, 1.0):                           # 垂带 — one line each side
-        ln(P(0.0, k, 0.0), P(1.0, k, -th), 0.85, 0.62)
+        ln(P(0.0, k, 0.0), P(1.0, k, -th), lu * 1.15, 0.62)
 
 
-def scholar(cv, rng, prj, r, Zc, ink, pale, a, rad):
+def scholar(cv, rng, prj, r, Zc, ink, pale, a, rad, u, paper=None):
     """高士 — somebody in it, which is the point of a 亭. Standing at the
     railing, in profile, looking out.
 
@@ -595,6 +702,7 @@ def scholar(cv, rng, prj, r, Zc, ink, pale, a, rad):
     x, y = math.cos(a) * rad, math.sin(a) * rad
     hs = Zc * 0.66                                  # a person against a column
     sd = 1.0 if rng.random() < 0.5 else -1.0        # which way he is facing
+    lu = u                      # `P` below takes a lateral fraction called `u`
 
     def P(u, v):
         p = prj(x + sd * u * hs, y, v * hs)
@@ -615,23 +723,59 @@ def scholar(cv, rng, prj, r, Zc, ink, pale, a, rad):
                 return u0 + (u1 - u0) * (v - v0) / max(1e-6, v1 - v0)
         return pts[-1][0] if v > pts[-1][1] else pts[0][0]
 
+    # 留白 — his own paper first, the same as the furniture's (§`body`) and
+    # for the same reason, only worse: he stands at the near railing, so the
+    # two rails and a 棂条 or three cross him at chest height, and behind
+    # those is whatever the hillside was doing. A 0.10 wash over that is not
+    # a robe, it is a gauze curtain with a dark bead on top — which is what
+    # he was: the handrail ran clean through him and the 皴 of the rock
+    # showed inside his sleeve. A person is the one thing in a painting the
+    # eye will not accept as transparent.
+    # The robe only, not the head: the hull of robe-plus-head is a blunt
+    # pentagon that stands a pale box out behind the shoulders, and a disc
+    # at 0.90 ink needs nothing cleared under it anyway.
+    _reserve(cv, paper, [P(uu, vv) for uu, vv in back + front],
+             a=0.90, feather=1.2)
     # 衣 — the robe, as tone first: the body has to be a mass before a line in
     # it is worth drawing, or the dark head has nothing of its own weight to
     # sit on and the figure comes out top-heavy.
+    #
+    # And the tone has to be paid for twice once the paper is reserved. At
+    # 0.10 over the 檐下 wash he was a dim shape in a dim interior and read
+    # well enough by accident; clear the paper under him and the same 0.10 is
+    # nothing at all — a wire hairpin with a bead on top, standing in a
+    # white cut-out of himself. 向背 is the fix and it is free: the robe is
+    # a cylinder, so it is darkest at the shaded edge and lightest a third
+    # of the way in from the lit one, and three tones across forty pixels
+    # are enough to turn an outline into a body.
     step = 0.55 / hs
     v = 0.0
     while v <= 0.845:
-        p, q = P(edge(back, v), v), P(edge(front, v), v)
-        brush_seg(cv, p[0], p[1], q[0], q[1], 0.8, 0.8, pale, 0.10)
+        ub, uf = edge(back, v), edge(front, v)
+        p, q = P(ub, v), P(uf, v)
+        ns = max(3, int(abs(q[0] - p[0]) / 0.7))
+        for t in range(ns + 1):
+            g = t / float(ns)                     # 0 at the back, 1 in front
+            lam = 0.30 + 0.22 * math.cos((g - 0.62) * math.pi)
+            x_ = p[0] + (q[0] - p[0]) * g
+            y_ = p[1] + (q[1] - p[1]) * g
+            brush_seg(cv, x_, y_, x_, y_ + step * hs * 1.1, lu * 0.8,
+                      lu * 0.8, pale, lam * 0.22)
         v += step
-    brush_path(cv, [P(u, w) for u, w in back], 1.0, 0.8, ink, 0.70)
-    brush_path(cv, [P(u, w) for u, w in front], 0.95, 0.75, ink, 0.64)
+    # The contours come down to meet it. A black 1.5-unit line round a mass
+    # that now has its own tone is a cartoon outline, and the capsule brush
+    # beads at every joint at that width.
+    brush_path(cv, [P(u, w) for u, w in back], lu * 1.15, lu * 0.95,
+               ink, 0.60)
+    brush_path(cv, [P(u, w) for u, w in front], lu * 1.05, lu * 0.88,
+               ink, 0.54)
     # 下襟 — the hem, and not level: a level hem on a vertical mass is a plinth
     brush_path(cv, [P(-0.170, 0.000), P(-0.04, -0.022), P(0.190, 0.018)],
-               1.0, 0.85, ink, 0.68)
+               lu * 1.20, lu * 1.00, ink, 0.64)
     # 带 — the sash, the one line across the figure, and the thing that says
     # where the waist is. Without it the robe is a sleeve standing up by itself
-    brush_seg(cv, *(P(-0.128, 0.455) + P(0.138, 0.455)), 0.9, 0.9, ink, 0.46)
+    brush_seg(cv, *(P(-0.128, 0.455) + P(0.138, 0.455)),
+              lu * 1.25, lu * 1.25, ink, 0.46)
     # 头 — the one dark mark on the figure, over the shoulders with a neck's
     # worth of paper under it.
     hd = P(sd * 0.0 - 0.012, 0.912)
@@ -643,15 +787,15 @@ def scholar(cv, rng, prj, r, Zc, ink, pale, a, rad):
     # 袖 — one sleeve, hanging. It is what gives the figure an attitude; run
     # out past the contour it was a limb sticking out of the mass.
     brush_path(cv, [P(0.085, 0.755), P(0.168, 0.640), P(0.150, 0.505)],
-               0.9, 0.7, ink, 0.50)
+               lu * 1.25, lu * 1.0, ink, 0.50)
 
 
-def furniture(cv, rng, prj, r, ink, pale, a, paper=None):
+def furniture(cv, rng, prj, r, ink, pale, a, u, paper=None):
     """石桌石凳 — a stone table and a stool or two, on the far side."""
     x, y = math.cos(a) * r * 0.44, math.sin(a) * r * 0.44
     s = r * 0.30
 
-    def ring(cx, cy, rad, z, al, w=0.6, half=None):
+    def ring(cx, cy, rad, z, al, w=None, half=None):
         """A circle in the world is an ellipse on paper — and in parallel
         projection it is exactly an ellipse, with no foreshortening to get
         wrong. Drawn as a filled `disc` instead, a stone table came out as a
@@ -663,7 +807,8 @@ def furniture(cv, rng, prj, r, ink, pale, a, paper=None):
         pts = [prj(cx + math.cos(t * TAU / 24.0) * rad,
                    cy + math.sin(t * TAU / 24.0) * rad, z)
                for t in range(lo, hi + 1)]
-        brush_path(cv, pts, w, w, ink, al)
+        ww = u * 0.85 if w is None else w
+        brush_path(cv, pts, ww, ww, ink, al)
 
     def body(cx, cy, rad, z, al):
         """And a slab needs a body, for the same reason the platform does (see
@@ -699,14 +844,15 @@ def furniture(cv, rng, prj, r, ink, pale, a, paper=None):
     _reserve(cv, paper, [pa, pb, qb, qa], a=0.72, feather=1.2)
     fill_contours(cv, [[pa, pb, qb, qa]], ink, 0.17)  # 石鼓 — a drum pedestal
     for p, q in ((pa, qa), (pb, qb)):
-        brush_seg(cv, p[0], p[1], q[0], q[1], 0.8, 0.8, ink, 0.50)
-    ring(x, y, tr * 0.52, 0.0, 0.30, w=0.5)         # its foot on the floor
+        brush_seg(cv, p[0], p[1], q[0], q[1], u * 1.1, u * 1.1,
+                  ink, 0.50)
+    ring(x, y, tr * 0.52, 0.0, 0.30, w=u * 0.7)         # its foot on the floor
     for k in (-1.0, 1.0):                           # 石凳 — a stool each side
         sx = x + math.cos(a + 1.57) * s * 1.30 * k
         sy = y + math.sin(a + 1.57) * s * 1.30 * k
         body(sx, sy, s * 0.30, s * 0.70, 0.19)
-        ring(sx, sy, s * 0.30, s * 0.70, 0.42, w=0.55)
-        ring(sx, sy, s * 0.30, s * 0.62, 0.26, w=0.5, half=(12, 24))
+        ring(sx, sy, s * 0.30, s * 0.70, 0.42, w=u * 0.78)
+        ring(sx, sy, s * 0.30, s * 0.62, 0.26, w=u * 0.7, half=(12, 24))
         p, q = prj(sx, sy, 0.0), prj(sx, sy, s * 0.64)
         brush_seg(cv, p[0], p[1], q[0], q[1], max(1.0, s * 0.16),
                   max(1.0, s * 0.16), ink, 0.34)
@@ -898,7 +1044,58 @@ def _reserve(cv, paper, pts, a=0.80, feather=2.0):
                 buf[i + k] = int(o + (paper[i + k] - o) * al)
 
 
-def plaque(cv, rng, prj, m0, m1, r, Zb, font, text, ink):
+def _shade(cv, pts, col, a0, a1, gamma=1.6, feather=2.5, band=None):
+    """A graded wash over the screen hull of a set of points: `a0` at the top
+    of the region, `a1` at the bottom, eased by `gamma`.
+
+    `band` is the pair of screen y the ramp is measured between, and it is
+    needed because the hull is not what the eye calls the region. Under a
+    parallel projection that climbs, the top of the column cage's hull is the
+    *back* of the building — hidden behind the near beam and the roof — so a
+    ramp keyed to the hull spends its whole strong end where nothing can be
+    seen and arrives at the visible interior already faded out. Keyed to the
+    near beam instead, the shadow is darkest exactly under the eave the
+    viewer is looking in past.
+
+    `_reserve` above takes paper back; this is the other half of the same
+    idea and the module went without it far too long. Everything in the
+    landscape is 染 — a mountain *is* a wash with lines in it — and the 亭 was
+    drawn with nothing but lines, so however carefully those lines were
+    weighted the building sat on the sheet like a diagram taped to a
+    painting. One wash in the right place fixes more of that than any amount
+    of work on the drawing: 檐下 — the shadow the roof holds under itself.
+    A 亭 is a roof on posts with *air* under it, and air under a roof is dark.
+    """
+    hull = _hull(pts)
+    if len(hull) < 3:
+        return
+    ys = [p[1] for p in hull]
+    ty, by = (min(ys), max(ys)) if band is None else band
+    if by - ty < 2.0:
+        return
+    inv = 1.0 / (by - ty)
+    y0 = max(0, int(min(ys)))
+    y1 = min(cv.h - 1, int(max(ys)) + 1)
+    blend = cv.blend
+    for y in range(y0, y1 + 1):
+        xs = []
+        for i in range(len(hull)):
+            (ax, ay), (bx, by_) = hull[i], hull[(i + 1) % len(hull)]
+            if (ay <= y < by_) or (by_ <= y < ay):
+                xs.append(ax + (bx - ax) * (y - ay) / (by_ - ay))
+        if len(xs) < 2:
+            continue
+        t = min(1.0, max(0.0, (y - ty) * inv)) ** gamma
+        av = a0 + (a1 - a0) * t
+        if av <= 0.004:
+            continue
+        xa, xb = min(xs), max(xs)
+        for x in range(max(0, int(xa)), min(cv.w - 1, int(xb)) + 1):
+            e = min(x - xa, xb - x) / feather
+            blend(x, y, col, av * min(1.0, max(0.0, e)))
+
+
+def plaque(cv, rng, prj, m0, m1, r, Zb, font, text, ink, u):
     """匾额 — the name board over the entrance.
 
     Every 亭 in China has a name and the name is hung in the entrance bay.
@@ -918,7 +1115,7 @@ def plaque(cv, rng, prj, m0, m1, r, Zb, font, text, ink):
     for j in range(1, int(h)):                  # the board, washed flat
         brush_seg(cv, x0, y0 + j, x0 + w, y0 + j, 0.6, 0.6, I("qing"), 0.11)
     brush_path(cv, [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h),
-                    (x0, y0)], 0.8, 0.8, ink, 0.72)
+                    (x0, y0)], u * 1.15, u * 1.15, ink, 0.72)
     # 横匾 — written across, not down, which is the one place in any of these
     # painters where a line of characters runs left to right.
     for i, ch in enumerate(text[:2]):
@@ -927,7 +1124,7 @@ def plaque(cv, rng, prj, m0, m1, r, Zb, font, text, ink):
 
 
 def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
-         occupant=True, name=None, font=None, paper=None):
+         occupant=True, name=None, font=None, paper=None, lightm=0.0):
     """One 亭, drawn from the ground up and from the back forward.
 
     Order is everything and there is no z-buffer: the platform, then the
@@ -937,7 +1134,8 @@ def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
     pavilion turns into an x-ray of itself.
     """
     Zc = r * 1.42                              # column height, floor to beam
-    wc = max(1.2, r * 0.072)
+    u = unit(r)                                # §unit — one ladder of weights
+    wc = u * 4.5                               # 柱 — a mass, not a line
     cols = _ngon(n, rot, r)
 
     # which bay is the entrance: the one most squarely facing the viewer
@@ -977,15 +1175,77 @@ def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
         mm = door[1] + math.pi / n
         qx, qy = math.cos(mm + math.pi * 0.5), math.sin(mm + math.pi * 0.5)
         sx, sy = math.cos(mm), math.sin(mm)
+        # (`t`, not `u`: `u` is the weight unit and everything below depends
+        #  on it. Bound here to a step fraction it leaked out of the loop at
+        #  1.0 and silently re-scaled the whole ladder — 额枋, 台基, 栏杆,
+        #  雀替 and the entire roof — for every sheet with a `paper` to
+        #  reserve against, which is every sheet `compose` renders. At the
+        #  default size that is the ladder at 61 % of its weights, and the
+        #  building reads as a wireframe; on a small 册页 leaf the same bug
+        #  runs the other way and the marks come out half again too heavy.
+        #  One letter, and it undid the one thing §unit exists to guarantee.)
         quad = []
-        for u, z in ((0.0, 0.0), (1.0, -th)):
-            hw, dd = Rb * (0.17 + 0.10 * u), Rb + th * 0.46 * 3 * u
+        for t, z in ((0.0, 0.0), (1.0, -th)):
+            hw, dd = Rb * (0.17 + 0.10 * t), Rb + th * 0.46 * 3 * t
             for k in (-1.0, 1.0):
                 quad.append(prj(sx * dd + qx * hw * k,
                                 sy * dd + qy * hw * k, z))
         _reserve(cv, paper, quad, a=0.74, feather=1.4)
 
-    _base(cv, rng, prj, n, rot, r, ink, pale, th, door[1])
+    # 脚下 — where the stone meets the hill, before the stone is drawn.
+    #
+    # 留白 gives the building its paper back and leaves a clean edge doing
+    # it, and a clean edge between two things is a cut-out: the 台基 came out
+    # a white box laid on a brown slope, brighter than anything else in the
+    # lower half of the sheet, with the hill passing behind it untouched.
+    # Grass along the join (see `compose`) was the first attempt and it is
+    # necessary but not sufficient — a dozen flicks cannot say *this object
+    # is heavy and standing on that one*. What says it is tone: a hard
+    # accretion of ink in the angle, fading off in a few pixels, and a
+    # broader smear running away from the light. Drawn before `_base` so the
+    # stone goes over its own top edge and the dark stays outside the slab.
+    Rb = r * 1.26
+    sdir = -1.0 if math.cos(lightm) >= 0.0 else 1.0
+    for i in range(n):
+        m0 = rot + i * TAU / n
+        mm = m0 + math.pi / n
+        if prj.facing(mm) <= 0.0:
+            continue
+        a = prj(math.cos(m0) * Rb, math.sin(m0) * Rb, -th)
+        b = prj(math.cos(m0 + TAU / n) * Rb, math.sin(m0 + TAU / n) * Rb, -th)
+        for k in range(1, 8):
+            t = k / 7.0
+            dy = r * 0.075 * t * t
+            dx = sdir * r * 0.10 * t
+            brush_seg(cv, a[0] + dx * 0.25, a[1] + dy,
+                      b[0] + dx, b[1] + dy, max(0.9, r * 0.030),
+                      max(0.9, r * 0.030), pale, 0.105 * (1.0 - t) ** 1.3)
+        brush_seg(cv, a[0], a[1] + u * 0.8, b[0], b[1] + u * 0.8,
+                  u * 1.4, u * 1.4, ink, 0.34)
+
+    _base(cv, rng, prj, n, rot, r, ink, pale, th, door[1], u, lightm)
+
+    # 檐下 — the shade the roof keeps under itself, before a post goes in.
+    # The one wash the building needs and the last thing it got. Without it
+    # the interior is the brightest region on the sheet: reserved paper, a
+    # floor at 0.09, and the far columns and far railing drawn across it as
+    # pale grey wires with nothing behind them to be pale *against*. With it
+    # the same marks read as carpentry standing in shadow, the near columns
+    # come forward because they are dark against dark-grey rather than black
+    # against white, and the building acquires the one property a line
+    # drawing can never have — an inside.
+    void = []
+    for i in range(n):
+        m = rot + i * TAU / n
+        cx_, cy_ = math.cos(m) * r * 0.99, math.sin(m) * r * 0.99
+        void.append(prj(cx_, cy_, Zc))
+        void.append(prj(cx_, cy_, 0.0))
+    # Strong at the beam and almost gone at the floor: the shadow belongs to
+    # the roof, not to the floor, and carried all the way down it fills the
+    # 亭 with smoke and the platform loses its top. Measured between the
+    # *near* beam and the near floor — see `band` in `_shade`.
+    _shade(cv, void, pale, 0.40, 0.04,
+           band=(prj(0.0, -r, Zc)[1], prj(0.0, -r, 0.0)[1]), gamma=1.25)
 
     # columns and bays, back to front. A column's depth is its own Y; a
     # bay's is the mean of the two it hangs between.
@@ -1005,8 +1265,11 @@ def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
         # A far column at three quarters the width and half the ink came out a
         # soft grey bar: at that weight `brush_seg`'s falloff is most of the
         # stroke and the column reads as a column of fog. Thinner is further.
+        # 收分 — and it is thinner at the top. A Chinese column tapers about
+        # a tenth over its height, and the taper is the difference between a
+        # post and a length of pipe.
         brush_seg(cv, a0[0], a0[1], a1[0], a1[1],
-                  wc if near else wc * 0.52, wc * 0.86 if near else wc * 0.44,
+                  wc if near else wc * 0.52, wc * 0.80 if near else wc * 0.42,
                   ink, 0.90 if near else 0.40)
 
     for i in order:
@@ -1027,15 +1290,18 @@ def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
         q1 = prj(math.cos(m1) * r, math.sin(m1) * r, Zc - r * 0.085)
         front = prj.facing(mm) > 0.0
         al = 0.88 if front else 0.34
-        brush_seg(cv, p0[0], p0[1], p1[0], p1[1], 1.0, 1.0, ink, al)
-        brush_seg(cv, q0[0], q0[1], q1[0], q1[1], 0.8, 0.8, ink, al * 0.8)
+        brush_seg(cv, p0[0], p0[1], p1[0], p1[1], u * 1.7, u * 1.7, ink, al)
+        brush_seg(cv, q0[0], q0[1], q1[0], q1[1], u * 1.2, u * 1.2,
+                  ink, al * 0.8)
         if front:
-            _frieze(cv, rng, prj, m0, m1, r, Zc - r * 0.085, ink, r * 0.20)
+            _frieze(cv, rng, prj, m0, m1, r, Zc - r * 0.085, ink, r * 0.20, u)
         if i == door[2]:
             if name:
-                plaque(cv, rng, prj, m0, m1, r, Zc - r * 0.10, font, name, ink)
+                plaque(cv, rng, prj, m0, m1, r, Zc - r * 0.10, font, name,
+                       ink, u)
         else:
-            _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front, bench=front)
+            _rail(cv, rng, prj, m0, m1, r, Zc, ink, pale, front,
+                  bench=front, u=u)
         if i == far_bay[2] and occupant:
             # the interior, drawn once the far side of the building is up
             if rng.random() < 0.62:
@@ -1057,12 +1323,13 @@ def ting(cv, rng, prj, n, rot, r, ink, pale, tiers=1, bow=0.035,
                                                0.0)[0]) for j in range(n))
                         if best is None or gap > best:
                             best, ba = gap, cand
-                scholar(cv, rng, prj, r, Zc, ink, pale, ba, r * 0.74)
+                scholar(cv, rng, prj, r, Zc, ink, pale, ba, r * 0.74, u,
+                        paper)
             else:
                 furniture(cv, rng, prj, r, ink, pale,
-                          far_bay[0] + rng.uniform(-0.4, 0.4), paper)
+                          far_bay[0] + rng.uniform(-0.4, 0.4), u, paper)
 
-    roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow)
+    roof(cv, rng, prj, n, rot, r, Zc, ink, pale, tiers, bow, u, lightm)
     return Zc
 
 
@@ -1139,22 +1406,32 @@ def rockmass(cv, rng, role, span, hgt, base, anchor, near3, far3, grain,
     return R
 
 
+# `ting`, `tx` and `ty` are the subject's size and place on the sheet, and
+# they are wider than they look like they need to be on purpose.
+#
+# Judged one sheet at a time every setting below was defensible: a 亭 at
+# 0.125–0.155 of the short side is a good size for a 亭. Judged nine at a
+# time (the 册页 test — 虾蟹 §5.1) the set was the same painting nine times,
+# because a 1.24× range of size and a fifth of the sheet of travel is not
+# variation the eye can see once the subject is the same shape every time.
+# The ranges here are about 1.6× in size and a quarter of the sheet in each
+# direction, which is the least that reads as nine different compositions.
 SCENES = {
     "松亭": dict(
         en="pine pavilion — a spur of rock, old pines, cloud below",
-        ting=(0.125, 0.155), tx=(0.30, 0.44), ty=(0.56, 0.68),
+        ting=(0.105, 0.172), tx=(0.26, 0.47), ty=(0.52, 0.72),
         far=(1, 3), pines=(2, 4), water=0.15, fall=0.45, cliff=0.55,
         mist=1.0, geese=0.30, bamboo=0.20, boat=0.0,
     ),
     "水亭": dict(
         en="water pavilion — built at the lip of the water",
-        ting=(0.115, 0.145), tx=(0.26, 0.42), ty=(0.52, 0.62),
+        ting=(0.098, 0.158), tx=(0.22, 0.45), ty=(0.48, 0.66),
         far=(2, 4), pines=(1, 3), water=0.95, fall=0.10, cliff=0.20,
         mist=0.8, geese=0.55, bamboo=0.35, boat=0.55,
     ),
     "山亭": dict(
         en="mountain pavilion — a terrace under a wall of rock",
-        ting=(0.110, 0.140), tx=(0.28, 0.46), ty=(0.60, 0.72),
+        ting=(0.095, 0.152), tx=(0.24, 0.48), ty=(0.56, 0.76),
         far=(1, 2), pines=(2, 4), water=0.30, fall=0.70, cliff=0.90,
         mist=0.9, geese=0.20, bamboo=0.30, boat=0.0,
     ),
@@ -1245,7 +1522,13 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     S = min(W, H)
     sc, st = SCENES[scene_key], STYLES[style_key]
     cun = CUN[cun_key]
-    ss.set_light(rng)
+    lang = ss.set_light(rng)
+    # 受光 — which side of everything is lit. `shanshui.LIGHT` points *toward*
+    # the source in screen coordinates, so its x sign is the side the light
+    # comes from; the building is shaded off the same number as the hills, or
+    # the 亭 is lit from the right on a sheet whose mountains are lit from the
+    # left, which is a thing no amount of drawing can recover from.
+    lightm = 0.0 if math.cos(lang) >= 0.0 else math.pi
     ground = gb.paint_ground(cv, rng)
     paper = bytes(cv.buf)
     grain = Grain(rng)
@@ -1274,7 +1557,33 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     # because the width of the platform *on paper* depends on them, and the
     # shelf cut into the terrace has to be exactly that wide.
     az, kd = rng.uniform(0.44, 0.60), rng.uniform(0.46, 0.58)
-    foot = r * 1.26 * (1.0 + math.cos(az) * kd)
+    # ...and so is the plan's rotation, for the same reason.
+    rot = -math.pi * 0.5 - math.pi / n + rng.uniform(-0.20, 0.20)
+    # 平面宽 — the platform's half width *on paper*, which is the width the
+    # shelf has to be planed to and nothing wider.
+    #
+    # This is measured, not estimated, and the two estimates it replaces are
+    # between them the whole of the **mesa** — the flat-topped trapezoid the
+    # terrace kept coming out as, with a perfectly horizontal skyline
+    # sticking out either side of the building.
+    #
+    #   `1.26r·(1 + cos az·kd)` = 1.9r adds the depth offset to the radius as
+    #   though the near and far corners were at opposite ends of a diameter.
+    #   They are not: `sx = X + Y·cx`, so the widest point of a *circle* of
+    #   radius Rb is `Rb·√(1 + cx²)`.
+    #
+    #   And that, 1.37r, is still wrong, because the plan is a hexagon and
+    #   not a circle: only one rotation in six puts a vertex at the widest
+    #   bearing, and the rest of the time the true half width is as little as
+    #   0.87 of it. Measured over the vertices it averages about 1.2r.
+    #
+    # 1.9 against 1.2 is fifty per cent of surplus shelf, cut dead level,
+    # either side of the 亭 — and no amount of work on the shoulders can help
+    # while the flat itself is half as long again as the thing standing on it.
+    cxp = math.cos(az) * kd
+    foot = r * 1.26 * max(abs(math.cos(rot + i * TAU / n)
+                              + cxp * math.sin(rot + i * TAU / n))
+                          for i in range(n))
 
     # ---- 远山 — ridges across the top, pale, behind everything ---------
     for k in range(rng.randint(*sc["far"])):
@@ -1320,6 +1629,9 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     y_w = base_t - hgt_t * rng.uniform(0.10, 0.34)
 
     # ---- 崖 — a wall of rock behind the pavilion, on the far side ------
+    # The band of mist across the cliff's foot is decided before the cliff is
+    # drawn, because the waterfall has to end in it. See below.
+    y_mist = ty - r * rng.uniform(1.0, 1.9)
     if rng.random() < sc["cliff"]:
         hgt = H * rng.uniform(0.30, 0.46)
         base = ty - r * rng.uniform(0.1, 0.6)
@@ -1329,10 +1641,27 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
                  spire=(0.62, 1.30), fade=hgt * 0.18)
         if rng.random() < sc["fall"]:
             fx = W * mx(rng.uniform(0.66, 0.90))
-            waterfall(cv, rng, paper, fx, base - hgt * rng.uniform(0.3, 0.6),
-                      base + H * 0.03, max(2.4, S * 0.012), ink_d)
-    mist(cv, rng, paper, ty - r * rng.uniform(1.0, 1.9), H * 0.045,
-         0.55 * sc["mist"])
+            y_top = base - hgt * rng.uniform(0.3, 0.6)
+            # 瀑入云 — and it ends *in* the mist, not three per cent of the
+            # sheet below the cliff's foot.
+            #
+            # `waterfall` works by lifting the rock back toward paper along a
+            # wavering column and darkening the banks either side of it. High
+            # on the face, where the rock is dark, that is water. Carried on
+            # down past the foot it crosses ground that is already nearly
+            # paper, so the lift does nothing and the two banks are all that
+            # is left: a soft grey column three hundred pixels long standing
+            # in the open with no rock around it and no pool under it — the
+            # one mark on these sheets that people read as a smudge rather
+            # than as a thing. A fall has to *stop* somewhere, and the only
+            # honest places are a pool and a cloud. This one gets the cloud,
+            # which is also why the mist's height is settled above: it is
+            # drawn last, over the end of the fall, and dissolves it.
+            y_bot = min(base + H * 0.03, y_mist + H * 0.012)
+            if y_bot - y_top > H * 0.06:
+                waterfall(cv, rng, paper, fx, y_top, y_bot,
+                          max(2.4, S * 0.012), ink_d)
+    mist(cv, rng, paper, y_mist, H * 0.045, 0.55 * sc["mist"])
 
     # ---- 坡 — the terrace the 亭 stands on -----------------------------
     # The rock and the 亭 are fitted to each other, and the fitting is done by
@@ -1352,7 +1681,7 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     # summit and the random 15–34 % plateau there was hardly any level ground
     # on it at all, so the 亭 ended up perched on a sliver of rock.
     cyk = math.sin(az) * kd
-    ext = r * 1.46 + r * 1.26 * math.cos(az) * kd
+    ext = foot * (1.46 / 1.26)                 # 出檐 — the roof, see `foot`
     drop = r * 0.26 + (r * 1.26 + r * 0.26 * 1.38) * cyk
     rise = r * 2.45 + r * 1.46 * cyk
     shelf = {}
@@ -1412,25 +1741,57 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
         # with a short ramp at each shoulder so the 台 is built into the hill
         # rather than sawn out of it.
         top = byy + r * 0.26
-        half = foot + r * 0.10
-        ramp = max(3.0, r * 0.22)
+        # Level under the slab and nowhere else, and then a **talus**: a cut
+        # that climbs away from the bench at a constant angle until it runs
+        # into whatever the hill was already doing.
+        #
+        # The first version planed level for `foot + r*0.10` and then climbed
+        # back over a fixed ramp of `r*0.22`. Both halves of that were wrong.
+        # The level part was too long (see `foot` in `compose`), and the ramp
+        # was far too short to reach the hill: it stopped a hundred pixels
+        # above the bench with the natural crest still two hundred above
+        # *that*, so the cut ended in a dead vertical wall three hundred
+        # pixels tall and perfectly straight — a quarry face, in a landscape
+        # where nothing else has a straight edge anywhere.
+        #
+        # A bench cut into a slope does not have a length. It has an *angle*,
+        # and it ends wherever the hillside happens to come down to meet it,
+        # which is a different place on each side and no place at all when
+        # the hill was already lower. So: a slope per side, drawn
+        # independently, with a long slow wobble along it, and no bound on
+        # how far it runs — `max` stops it the moment the hill is below it.
+        hard = foot + r * 0.04
+        tal = (rng.uniform(0.42, 0.88), rng.uniform(0.42, 0.88))
+        wob = (rng.uniform(0.0, TAU), rng.uniform(0.0, TAU))
+        per_ = max(4.0, r * rng.uniform(0.22, 0.38))
         # `max` because y grows downward: the shelf is cut *down* to the
         # lowest ground under it, and anywhere the hill is already lower than
         # the shelf — a dip at the shoulder — it stays where it is.
         for i in range(n):
-            d = abs((x0 + i) - bx)
-            if d <= half:
+            s = (x0 + i) - bx
+            d = abs(s)
+            if d <= hard:
                 crest[i] = max(crest[i], top)
-            elif d <= half + ramp:
-                u = (d - half) / ramp
-                crest[i] = max(crest[i], top - u * u * ramp * 1.1)
+                continue
+            k = 0 if s < 0.0 else 1
+            e = d - hard
+            z = top - e * tal[k] - math.sin(e / per_ + wob[k]) * r * 0.045
+            crest[i] = max(crest[i], z)
         shelf["x"], shelf["y"] = bx, byy
 
     terr = rockmass(cv, rng, "near", W * rng.uniform(0.86, 1.30),
                     hgt_t, base_t,
                     tx + r * rng.uniform(-0.3, 0.3), near3, far3, grain,
                     mode, per, amp, scrub, bow, scale, ink_d, H,
-                    peaks=(1, 2), spire=(0.52, 0.92), flat=0.90,
+                    # `flat` was 0.90 — nine tenths of the crest a plateau —
+                    # and that is a fossil of the version that *searched* the
+                    # crest for somewhere level to stand the 亭 on. Nothing
+                    # searches any more: `cut_shelf` makes the level ground.
+                    # Left at 0.90 all it did was guarantee that the terrace
+                    # was already a table before the shelf was cut into it,
+                    # which is the half of the mesa that survived fixing
+                    # `foot`. A 台 is a hill with a bench cut in it.
+                    peaks=(1, 2), spire=(0.52, 0.98), flat=0.22,
                     level=cut_shelf, centre=True)
     if terr is not None:
         # More 点 than a mountain would get. The shelf planes the crest dead
@@ -1503,13 +1864,12 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
         occ.add(px, py - h * 0.6, h * 0.34)
 
     # ---- 亭 ------------------------------------------------------------
-    prj = Oblique(tx, ty, az=az, kd=kd)
-    rot = -math.pi * 0.5 - math.pi / n + rng.uniform(-0.20, 0.20)
+    prj = Oblique(tx, ty, az=az, kd=kd)        # `rot` was settled with `foot`
     Zc = ting(cv, rng, prj, n, rot, r, ink_n, ink_d,
               tiers=1 if rng.random() < 0.78 else 2,
               bow=0.03 + rng.random() * 0.03,
               name=PLAQUE[rng.randrange(len(PLAQUE))] if rng.random() < 0.55
-              else None, font=FONT, paper=paper)
+              else None, font=FONT, paper=paper, lightm=lightm)
     occ.add(tx, ty - r * 1.1, r * 1.9)
 
     # 草 — tufts along the foot of the platform. The reserved paper leaves a
@@ -1518,14 +1878,40 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     # grass across the join is what a painter puts there, and it is the only
     # mark in the picture whose job is to be ambiguous.
     yb = ty + r * 0.26
+    # The join is the *silhouette of the platform's foot*, and that is not the
+    # shelf level. `ty + r*0.26` is where the cut was made, which on screen is
+    # about half way up the slab: the far side of a slab drawn in parallel
+    # projection climbs, so its bottom ring runs from well below that line at
+    # the near corner to well above it at the back. Clamped to the cut, a
+    # third of the tufts came out standing *on the pavilion floor* along its
+    # back edge — grass growing out of the paving, which is worse than no
+    # grass at all because it is the one mark here whose job is to be
+    # ambiguous and it was being unambiguously wrong.
+    Rb, thp = r * 1.26, r * 0.26
+    ring_f = [prj(math.cos(rot + i * TAU / n) * Rb,
+                  math.sin(rot + i * TAU / n) * Rb, -thp) for i in range(n)]
+
+    def slab_y(x):
+        """Screen y of the underside of the platform at this x, or None."""
+        lo = None
+        for i in range(n):
+            (ax, ay), (bx_, by_) = ring_f[i], ring_f[(i + 1) % n]
+            if ax == bx_ or not (min(ax, bx_) <= x <= max(ax, bx_)):
+                continue
+            yy = ay + (by_ - ay) * (x - ax) / (bx_ - ax)
+            lo = yy if lo is None else max(lo, yy)
+        return lo
+
     for _ in range(int(rng.randint(12, 20))):
         gx = tx + r * rng.uniform(-1.8, 1.8)
-        # On the join itself where the crest is known, which is not quite the
-        # foot of the platform: the seat is the lowest crest point under it,
-        # so off to one side the hill is a little higher and the grass has to
-        # climb with it.
+        # On the hill where the hill is visible, and on the stone's own foot
+        # where the stone is in front of it. Whichever is lower on paper wins,
+        # because that is the one the eye reads as the contact.
         cy_ = terr.crest_y(gx) if terr is not None else None
-        gy = yb if cy_ is None else max(yb - r * 0.07, min(yb + r * 0.06, cy_))
+        gy = yb if cy_ is None else cy_
+        sy = slab_y(gx)
+        if sy is not None:
+            gy = max(gy, sy)
         # ...and kept short and dry. Unclamped and at full length these went
         # up the crest beside the building and stood at floor height: a row of
         # tall dark spikes inside the 亭, which read as a picket fence.
@@ -1590,11 +1976,32 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
             # that is finally right, the man is half the height of the scholar
             # in the 亭 and the same inversion comes back one level down. An
             # empty moored boat is 野渡无人舟自横 and a better painting.
-            v = rng.uniform(0.28, 0.76)          # 0 at the far shore, 1 near
-            boat_x = W * mx(rng.uniform(0.34, 0.78))
-            boat_s = r * (2.0 + 1.1 * v)
-            moored_boat(cv, rng, boat_x, y_w + (H - y_w) * v, boat_s,
-                        ink_n, ink_d)
+            #
+            # 水上 — and it has to be *in the water*. The terrace runs down to
+            # the waterline and usually well past it, and the boat is drawn
+            # after the terrace, so one placed by (x, y) alone comes out
+            # moored on dry rock half way up the bank with the hillside
+            # showing through its hull. Which is a fault nobody sees while
+            # they are looking at the boat and nobody can un-see afterwards.
+            # Three samples along the hull, because at a third of the sheet's
+            # width the bow can be afloat while the stern is aground.
+            def aground(x, y):
+                """Is this point inside the terrace rather than on water?"""
+                if terr is None:
+                    return False
+                cy_ = terr.crest_y(x)
+                return cy_ is not None and y + r * 0.10 > cy_
+
+            for _ in range(14):
+                v = rng.uniform(0.28, 0.76)      # 0 at the far shore, 1 near
+                bx_ = W * mx(rng.uniform(0.34, 0.78))
+                bs_ = r * (2.0 + 1.1 * v)
+                by_ = y_w + (H - y_w) * v
+                if any(aground(bx_ + bs_ * f, by_) for f in (-0.5, 0.0, 0.5)):
+                    continue
+                boat_x, boat_s = bx_, bs_
+                moored_boat(cv, rng, bx_, by_, bs_, ink_n, ink_d)
+                break
         # 对岸 — a low far shore across the water, so the water has a far edge
         # as well as a near one and reads as a reach rather than as a tone.
         if rng.random() < 0.65 and y_w < H * 0.88:

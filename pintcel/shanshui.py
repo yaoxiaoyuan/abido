@@ -1514,11 +1514,27 @@ def shore_rocks(cv, rng, y0, y1, ink, scale=1.0, k=3):
             for _ in range(rng.randint(3, 6)):
                 L = hh * rng.uniform(0.6, 1.1)
                 sw = (lean + rng.uniform(-0.22, 0.22)) * L
-                x1 = rx + rng.uniform(-0.8, 0.8) * s
-                y1 = cy + rng.uniform(-0.2, 0.4) * s
-                st = bezier((x1, y1), (x1 + sw * 0.18, y1 - L * 0.45),
-                            (x1 + sw * 0.55, y1 - L * 0.82),
-                            (x1 + sw, y1 - L), 7)
+                # 芦根 — the foot of one reed. `fx, fy` and not `x1, y1`,
+                # which is what it was: `y1` is this function's *parameter*,
+                # the near edge of the water band, and it is read again at
+                # the top of every iteration of the outer loop. Bound here to
+                # a reed's foot it leaked out of both loops, and every rock
+                # after the first reeded one was placed against a band that
+                # had collapsed to the previous rock's position. Measured
+                # over 20 000 draws at k=4: the fourth rock's median y moved
+                # 41 % of the band toward the far shore, and 41 % of all
+                # rocks landed in the far quarter against 18 % intended.
+                # The visible half is worse than the clustering — `s` still
+                # came from the fresh `t` while `cy` came from the shrunken
+                # band, so the two stopped agreeing and a rock at the far
+                # edge could be drawn at three times the size its distance
+                # calls for, which is 远小近大 broken in the one place the
+                # function's own docstring promises it.
+                fx = rx + rng.uniform(-0.8, 0.8) * s
+                fy = cy + rng.uniform(-0.2, 0.4) * s
+                st = bezier((fx, fy), (fx + sw * 0.18, fy - L * 0.45),
+                            (fx + sw * 0.55, fy - L * 0.82),
+                            (fx + sw, fy - L), 7)
                 # One pass: a reed is thinner than the spacing of its own
                 # vertices, so segment-by-segment the overlapping end caps
                 # beaded it into a dashed line (see `_taper`).
