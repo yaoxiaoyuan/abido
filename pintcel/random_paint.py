@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""随笔 — draw one random painting from whichever of the nine painters comes up.
+"""随笔 — draw one random painting from whichever of the ten painters comes up.
 
-The nine modules already do all the work and they already agree on an
+The ten modules already do all the work and they already agree on an
 interface:
 
     paint(path, size=(w, h), seed=None, quiet=False) -> (path, title, seed)
@@ -11,8 +11,8 @@ and each one picks its own subject, weather, palette and ground when it is not
 told.  So the only thing left to choose is *which brush to pick up*, and this
 script does nothing else.  No new drawing code lives here.
 
-A batch is *dealt* rather than sampled: ask for nine and you get one from
-each of the nine painters, in a random order, each one as unrelated to its
+A batch is *dealt* rather than sampled: ask for ten and you get one from
+each of the ten painters, in a random order, each one as unrelated to its
 neighbours as two separate runs would be.  Ask for twelve and three painters
 get two.  Only the counts are pinned — see `deal` for why, and for what it
 deliberately does not touch.
@@ -24,7 +24,7 @@ it reads the PNGs back off disk and shrinks them.
 
     python3 random_paint.py                     # one painting, random painter
     python3 random_paint.py -n 4                 # four of them + random-sheet.png
-    python3 random_paint.py -n 9 --cols 3        # three to a row
+    python3 random_paint.py -n 10 --cols 5       # five to a row
     python3 random_paint.py -n 4 --no-sheet      # just the four paintings
     python3 random_paint.py -p orchid -s 909     # a named painter and seed
     python3 random_paint.py --size 600x800       # override the sheet
@@ -47,18 +47,20 @@ import orchid
 import grape
 import crab
 import mei
+import bird
 
 # name -> (module, 画科, the module's own default sheet)
 PAINTERS = {
     "gongbi":   (gongbi,   "工笔花卉", (1000, 1360)),
     "shanshui": (shanshui, "山水",     (1000, 1400)),
     "bamboo":   (bamboo,   "墨竹",     (900, 1300)),
-    "fish":     (fish,   "游鱼",     (900, 1200)),
+    "fish":     (fish,     "游鱼",     (900, 1200)),
     "pavilion": (pavilion, "亭景",     (900, 1200)),
     "orchid":   (orchid,   "墨兰",     (900, 1300)),
     "grape":    (grape,    "墨葡萄",   (900, 1300)),
     "crab":     (crab,     "虾蟹",     (900, 1200)),
     "mei":      (mei,      "墨梅",     (900, 1300)),
+    "bird":     (bird,     "翎毛",     (900, 1300)),
 }
 
 
@@ -349,7 +351,7 @@ def main(argv=None):
     ap.add_argument("-s", "--seed", type=int, default=None)
     ap.add_argument("-p", "--painter", default=None,
                     help="gongbi | shanshui | bamboo | fish | pavilion"
-                         " | orchid | grape | crab | mei")
+                         " | orchid | grape | crab | mei | bird")
     ap.add_argument("--size", default=None, help="WxH, e.g. 900x1200")
     ap.add_argument("--cols", type=int, default=4,
                     help="leaves per row on the 册页 summary (default 4)")
