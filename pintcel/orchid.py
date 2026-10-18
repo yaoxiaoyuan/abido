@@ -1864,7 +1864,7 @@ TITLE_B = ["图", "小景", "清趣", "写意", "图卷", "册页", "小品"]
 ACTION = ["写生", "戏作", "写意", "拟古", "画兰", "南窗写兰", "客窗戏墨",
           "并记"]
 SEAL_WORDS = ["幽香", "空谷", "九畹", "香祖", "墨缘", "写心", "素心", "芳洁",
-              "清芬", "兰友", "一枝", "君子"]
+              "清芬", "兰友", "一枝", "君子", "安之"]
 
 
 def vocabulary():
@@ -1925,7 +1925,8 @@ def inscribe(cv, rng, occ, S, title):
     margin = S * 0.040
     r0 = min(W, H) * 0.16
     for fy in (0.34, 0.52, 0.70):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
+    block = None
     if bw < W - 2 * margin and bh < H - 2 * margin:
         bx, by = occ.place(bw, bh, margin, corner_bias=1.6)
         paint_column(cv, rng, FONT, title, bx + gap + ss, by, gs, lead=lead)
@@ -1934,15 +1935,9 @@ def inscribe(cv, rng, occ, S, title):
         paint_seal(cv, rng, FONT, SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
                    bx + (ss - seal_s) * 0.5, end + gs * 0.2, seal_s)
         occ.add(bx + bw * 0.5, by + bh * 0.5, max(bw, bh) * 0.55)
-    if rng.random() < 0.5:                        # 压角章
-        s2 = S * rng.uniform(0.036, 0.050)
-        for cx, cy in ((W * 0.07, H * 0.88), (W * 0.88 - s2, H * 0.88),
-                       (W * 0.07, H * 0.07), (W * 0.88 - s2, H * 0.07)):
-            if occ.overlap(cx, cy, cx + s2, cy + s2, s2 * 0.5) == 0.0:
-                paint_seal(cv, rng, FONT,
-                           SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
-                           cx, cy, s2)
-                break
+        block = (bx, by, bw, bh)
+    if rng.random() < 0.5:                        # 压角章 — set against the 款
+        gb.corner_seal(cv, rng, FONT, SEAL_WORDS, occ, S, block)
 
 
 # --------------------------------------------------------------------------

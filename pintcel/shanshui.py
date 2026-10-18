@@ -2329,7 +2329,7 @@ TITLE_A = ["溪山", "烟雨", "秋山", "春山", "寒林", "云岫", "幽涧",
 TITLE_B = ["图", "小景", "图卷", "册页", "写意", "清趣", "小品", "卷"]
 ACTION = ["写意", "戏墨", "拟古", "并记", "笔意", "南窗写意", "客窗戏墨"]
 SEAL_WORDS = ["烟霞", "林泉", "闲云", "卧游", "山静", "听泉", "墨缘", "清赏",
-              "得趣", "心迹", "一壑"]
+              "得趣", "心迹", "一壑", "安之"]
 
 
 def vocabulary():
@@ -2386,7 +2386,8 @@ def inscribe(cv, rng, occ, S, title):
     # where open water and sky are anyway. One virtual disc says so.
     r0 = min(W, H) * 0.20
     for fy in (0.26, 0.42, 0.58, 0.74):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
+    block = None
     if bw < W - 2 * margin and bh < H - 2 * margin:
         bx, by = occ.place(bw, bh, margin, corner_bias=1.7)
         paint_column(cv, rng, FONT, title, bx + gap + ss, by, gs, lead=lead)
@@ -2395,15 +2396,9 @@ def inscribe(cv, rng, occ, S, title):
         paint_seal(cv, rng, FONT, SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
                    bx + (ss - seal_s) * 0.5, end + gs * 0.2, seal_s)
         occ.add(bx + bw * 0.5, by + bh * 0.5, max(bw, bh) * 0.55)
-    if rng.random() < 0.55:                       # 压角章
-        s2 = S * rng.uniform(0.036, 0.050)
-        for cx, cy in ((W * 0.07, H * 0.89), (W * 0.89 - s2, H * 0.89),
-                       (W * 0.07, H * 0.07), (W * 0.89 - s2, H * 0.07)):
-            if occ.overlap(cx, cy, cx + s2, cy + s2, s2 * 0.5) == 0.0:
-                paint_seal(cv, rng, FONT,
-                           SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
-                           cx, cy, s2)
-                break
+        block = (bx, by, bw, bh)
+    if rng.random() < 0.55:                       # 压角章 — set against the 款
+        gb.corner_seal(cv, rng, FONT, SEAL_WORDS, occ, S, block)
 
 
 def compose(cv, rng, scene_key, style_key, cun_key):

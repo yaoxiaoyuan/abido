@@ -784,6 +784,22 @@ def rock(cv, rng, x0, x1, yb, h, lt, dp, ink, alpha=0.9, moss=1.0):
     bot = [yb + (base.at(i / max(1, w - 1.0), 0.2) - 0.5) * h * 0.20
            for i in range(w)]
 
+    # 石无定形 — and no ruled edges either. The profile above is built out of
+    # straight shelves and straight flanks, which is the 折带 silhouette and
+    # correct, but laid down as a wash boundary it is a *cut* edge: the rock
+    # comes out as a piece of grey cardboard with corners. A fine wobble
+    # along the crest costs nothing and the edge becomes something a brush
+    # could have left.
+    rag = Noise(rng, 9, 2)
+    rag2 = Noise(rng, 27, 2)
+    top = [ty + (rag.at(i / max(1, w - 1.0), 0.3) - 0.5) * h * 0.075
+           + (rag2.at(i / max(1, w - 1.0), 0.7) - 0.5) * h * 0.030
+           for i, ty in enumerate(top)]
+    # 石骨 — the grain. A smooth vertical ramp with one slow wobble in it is
+    # an airbrushed solid; stone is mottled at the scale of the brush's own
+    # hairs, and without that scale in the wash no amount of 皴 on top of it
+    # will read as stone.
+    grn = Noise(rng, 19, 2)
     lx = gb.LIGHT[0]
     buf = cv.buf
     cw = cv.w
@@ -824,8 +840,10 @@ def rock(cv, rng, x0, x1, yb, h, lt, dp, ink, alpha=0.9, moss=1.0):
             # solid, and a rendered solid in a 写意 painting is a photograph
             # that has wandered into it: one flank comes up bright, the
             # other dark, and the mass reads as an extruded block.
-            sh = 0.46 * (1.0 - v) ** 1.3 + 0.11 * face + 0.06 * v \
-                + (wob.at(i / max(1.0, w - 1.0), clamp01(v)) - 0.5) * 0.34
+            sh = 0.46 * (1.0 - v) ** 1.5 + 0.22 * math.exp(-(v / 0.09) ** 2) \
+                + 0.11 * face + 0.06 * v \
+                + (wob.at(i / max(1.0, w - 1.0), clamp01(v)) - 0.5) * 0.34 \
+                + (grn.at(i / max(1.0, w - 1.0), clamp01(v)) - 0.5) * 0.22
             c = mix(lt, dp, clamp01(sh))
             # 下虚 — and the foot of a rock is left unfinished: the wash
             # thins away to nothing so the mass sits *in* the paper rather
@@ -867,13 +885,17 @@ def rock(cv, rng, x0, x1, yb, h, lt, dp, ink, alpha=0.9, moss=1.0):
                 corners.append(i - 1)
                 a0 = i - 1
         corners.append(i1)
+        off = Noise(rng, 6, 2)
         i = 0
         while i < len(corners) - 1:
             n = rng.randint(1, 3)                           # 一笔 per stroke
-            seg = [(x0 + j, top[j]) for j in corners[i:i + n + 1]]
+            seg = [(x0 + j,
+                    top[j] + (off.at(j / max(1, w - 1.0), 0.5) - 0.5)
+                    * h * 0.055)
+                   for j in corners[i:i + n + 1]]
             if len(seg) > 1:
-                brush_path(cv, seg, max(0.8, h * 0.014), max(0.6, h * 0.008),
-                           mix(dp, ink, 0.4), alpha * rng.uniform(0.26, 0.48))
+                brush_path(cv, seg, max(0.9, h * 0.017), max(0.6, h * 0.009),
+                           mix(dp, ink, 0.55), alpha * rng.uniform(0.40, 0.66))
             i += n + (1 if rng.random() < 0.3 else 0)       # 断 — the gap
     # 折带皴 — the name means *folded ribbon*, and it is literal: a flattish
     # shelf run with the side of the brush, then a short drop off its end,
@@ -884,12 +906,12 @@ def rock(cv, rng, x0, x1, yb, h, lt, dp, ink, alpha=0.9, moss=1.0):
     # hundred strokes on a big sheet and the rock came out shaded like a
     # woodcut; the number of marks a painter makes on one rock does not
     # depend on how large the paper is.
-    for _ in range(rng.randint(9, 17)):
+    for _ in range(rng.randint(13, 22)):
         i = rng.randrange(w)
         ty = top[i]
         if yb - ty < h * 0.20:
             continue
-        yy = ty + (yb - ty) * rng.uniform(0.12, 0.62)
+        yy = ty + (yb - ty) * rng.uniform(0.08, 0.46)
         ln = rng.uniform(0.07, 0.20) * w
         sg = rng.choice((1.0, -1.0))
         tilt = rng.uniform(-0.10, 0.10)
@@ -910,8 +932,8 @@ def rock(cv, rng, x0, x1, yb, h, lt, dp, ink, alpha=0.9, moss=1.0):
         # Widths in *pixels* here would be hairlines on a big sheet and
         # cudgels on a small one; a brush is a fraction of the form it is
         # drawing, so they go with the rock's own height.
-        lw = max(0.6, h * 0.010)
-        a = rng.uniform(0.09, 0.20)
+        lw = max(0.6, h * 0.011)
+        a = rng.uniform(0.13, 0.26)
         brush_seg(cv, x0 + i, yy, ex, ey,
                   lw * rng.uniform(0.7, 1.3), lw * rng.uniform(0.4, 0.8),
                   mix(dp, ink, 0.5), a)
@@ -1006,7 +1028,7 @@ TITLE_A = ["清风", "疏影", "月下", "雨后", "雪后", "幽篁", "新篁",
 TITLE_B = ["图", "小景", "清趣", "写意", "图卷", "册页", "小品"]
 ACTION = ["写生", "戏作", "写意", "拟古", "客窗戏墨", "南窗写竹", "并记"]
 SEAL_WORDS = ["清风", "墨缘", "虚心", "有节", "君子", "竹友", "闲心", "写心",
-              "石友", "听雨", "一枝"]
+              "石友", "听雨", "一枝", "安之"]
 
 
 def vocabulary():
@@ -1067,7 +1089,8 @@ def inscribe(cv, rng, occ, S, title):
     margin = S * 0.040
     r0 = min(W, H) * 0.18
     for fy in (0.30, 0.48, 0.66):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
+    block = None
     if bw < W - 2 * margin and bh < H - 2 * margin:
         bx, by = occ.place(bw, bh, margin, corner_bias=1.6)
         paint_column(cv, rng, FONT, title, bx + gap + ss, by, gs, lead=lead)
@@ -1076,15 +1099,9 @@ def inscribe(cv, rng, occ, S, title):
         paint_seal(cv, rng, FONT, SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
                    bx + (ss - seal_s) * 0.5, end + gs * 0.2, seal_s)
         occ.add(bx + bw * 0.5, by + bh * 0.5, max(bw, bh) * 0.55)
-    if rng.random() < 0.5:                        # 压角章
-        s2 = S * rng.uniform(0.036, 0.050)
-        for cx, cy in ((W * 0.07, H * 0.88), (W * 0.88 - s2, H * 0.88),
-                       (W * 0.07, H * 0.07), (W * 0.88 - s2, H * 0.07)):
-            if occ.overlap(cx, cy, cx + s2, cy + s2, s2 * 0.5) == 0.0:
-                paint_seal(cv, rng, FONT,
-                           SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
-                           cx, cy, s2)
-                break
+        block = (bx, by, bw, bh)
+    if rng.random() < 0.5:                        # 压角章 — set against the 款
+        gb.corner_seal(cv, rng, FONT, SEAL_WORDS, occ, S, block)
 
 
 # --------------------------------------------------------------------------
@@ -1193,7 +1210,15 @@ def compose(cv, rng, scene_key, weather_key, style_key):
         # and only the plateau of the profile clears the bottom edge: every
         # shelf and both flanks are below the border, and the rock is a slab.
         rh = (H - ry) + H * rng.uniform(0.02, 0.07)
-        rlt, rdp = plane_tone(st, "rock", 0.56 * we["k"])
+        # 石分三面 needs a *range*: the body of the rock is 淡墨 and must
+        # stay there, but if the dark stop of its ramp is diluted to match,
+        # the whole mass comes out inside forty levels of grey and reads as
+        # a flat piece of card with a line round it. So the pale stop stays
+        # where it was and the dark stop is drawn nearly straight from the
+        # stone — it is spent only in the band under the crest, in the 皴
+        # and in the moss, which is where a painter's dark ink goes.
+        rlt = plane_tone(st, "rock", 0.56 * we["k"])[0]
+        rdp = plane_tone(st, "rock", 0.95 * we["k"])[1]
         rock_top = rock(cv, rng, rx, rx + rw, ry + rh, rh,
                         rlt, rdp, node_ink, alpha=0.70,
                         moss=0.8 if style_key != "朱竹" else 0.4)

@@ -147,7 +147,13 @@ SCENES = {
                  spurs=(0, 2), clusters=(2, 4), bud=0.24, scars=(0, 1)),
     "折枝": dict(cn="折枝", en="a single cut branch — 贵稀不贵繁",
                  entry="cut", w0=(0.014, 0.020), L=(0.66, 0.88),
-                 segs=(2, 4), kink=0.46, old=0.25, limbs=(1, 2), whips=(3, 5),
+                 # 屈铁 — at least two 节. With `segs=(2, 4)` the common
+                 # case was one break in 1000 px of wood, and a single
+                 # alternating kink leaves the path going where it started:
+                 # a straight tapered rod across empty paper, which is
+                 # half of why this scene read as a western drawing even
+                 # after every mark on it had been fixed (§2.13).
+                 segs=(3, 4), kink=0.46, old=0.25, limbs=(1, 2), whips=(3, 5),
                  Lw=(0.18, 0.30), fork=(0.55, 1.00), span=(0.12, 0.90),
                  spurs=(0, 2), clusters=(2, 4), bud=0.34, scars=(0, 0)),
     "古干": dict(cn="老梅", en="an old trunk from the foot of the sheet",
@@ -1680,7 +1686,7 @@ TITLE_B = ["图", "小景", "清趣", "写意", "图卷", "册页", "小品"]
 ACTION = ["写生", "戏作", "写意", "拟古", "画梅", "灯下戏墨", "南窗写梅",
           "并记", "补梅", "雪窗消寒"]
 SEAL_WORDS = ["清赏", "墨缘", "寒香", "一枝", "写心", "铁骨", "孤芳", "老圃",
-              "香雪", "春信", "玉洁", "疏影"]
+              "香雪", "春信", "玉洁", "疏影", "安之"]
 
 
 def vocabulary():
@@ -1744,7 +1750,8 @@ def inscribe(cv, rng, occ, S, title):
     margin = S * 0.040
     r0 = min(W, H) * 0.15
     for fy in (0.34, 0.52, 0.70):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
+    block = None
     if bw < W - 2 * margin and bh < H - 2 * margin:
         bx, by = occ.place(bw, bh, margin, corner_bias=1.5)
         paint_column(cv, rng, FONT, title, bx + gap + ss, by, gs, lead=lead)
@@ -1753,15 +1760,9 @@ def inscribe(cv, rng, occ, S, title):
         paint_seal(cv, rng, FONT, SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
                    bx + (ss - seal_s) * 0.5, end + gs * 0.2, seal_s)
         occ.add(bx + bw * 0.5, by + bh * 0.5, max(bw, bh) * 0.55)
-    if rng.random() < 0.5:                        # 压角章
-        s2 = S * rng.uniform(0.036, 0.050)
-        for cx, cy in ((W * 0.07, H * 0.88), (W * 0.88 - s2, H * 0.88),
-                       (W * 0.07, H * 0.07), (W * 0.88 - s2, H * 0.07)):
-            if occ.overlap(cx, cy, cx + s2, cy + s2, s2 * 0.5) == 0.0:
-                paint_seal(cv, rng, FONT,
-                           SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
-                           cx, cy, s2)
-                break
+        block = (bx, by, bw, bh)
+    if rng.random() < 0.5:                        # 压角章 — set against the 款
+        gb.corner_seal(cv, rng, FONT, SEAL_WORDS, occ, S, block)
 
 
 # --------------------------------------------------------------------------

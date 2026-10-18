@@ -1444,7 +1444,7 @@ TITLE_A = ["松亭", "水亭", "山亭", "溪亭", "湖亭", "竹亭", "幽亭",
 TITLE_B = ["图", "小景", "图卷", "册页", "写意", "清趣", "小品", "卷"]
 ACTION = ["写意", "戏墨", "拟古", "并记", "笔意", "南窗写意", "客窗戏墨"]
 SEAL_WORDS = ["林泉", "闲云", "卧游", "山静", "听泉", "墨缘", "清赏", "得趣",
-              "一壑", "松风"]
+              "一壑", "松风", "安之"]
 PLAQUE = ["松风", "听泉", "观瀑", "清风", "水心", "爱晚", "闲云", "山静",
           "临流", "一壑"]
 
@@ -1497,7 +1497,7 @@ def inscribe(cv, rng, occ, S, title):
     margin = S * 0.035
     r0 = min(W, H) * 0.20
     for fy in (0.26, 0.42, 0.58, 0.74):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
     if bw < W - 2 * margin and bh < H - 2 * margin:
         bx, by = occ.place(bw, bh, margin, corner_bias=1.7)
         paint_column(cv, rng, FONT, title, bx + gap + sz, by, gs, lead=lead)

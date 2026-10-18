@@ -3271,7 +3271,7 @@ TITLE_B = ["图", "小景", "小品", "写意", "册页", "图卷", "清趣"]
 ACTION = ["写生", "戏作", "写意", "拟古", "画禽", "南窗戏墨", "并记",
           "拟八大笔意", "灯下作", "雪窗消寒"]
 SEAL_WORDS = ["清赏", "墨缘", "写心", "一枝", "幽禽", "闲趣", "天真", "独立",
-              "鸟语", "栖迟", "寄情", "老圃"]
+              "鸟语", "栖迟", "寄情", "老圃", "安之"]
 
 
 def vocabulary():
@@ -3314,44 +3314,6 @@ def _ganzhi(rng):
     return TIANGAN[rng.randrange(10)] + DIZHI[rng.randrange(12)]
 
 
-def _place_block(occ, bw, bh, margin, focus):
-    """Where the 款 goes — and it is not simply the emptiest corner.
-
-    The shared `Occupancy.place` scores a candidate by how much ink it sits
-    in, how near a corner it is, and then adds `cy * 0.15`, which is a
-    standing preference for the **top** of the sheet. That is right for a
-    flower painted up from the bottom edge and it is exactly wrong here:
-    俯枝 hangs its branch down from the top edge, so the bird, the twigs
-    and the only free corner the placer likes are all in the same third of
-    the paper, and the 款 goes up beside the subject while two thirds of
-    the sheet hangs underneath with nothing in it at all. Measured on the
-    册页 that is the loudest fault in the set — four leaves of nine with a
-    dead lower half.
-
-    A 款 is a counterweight. So the one term the shared placer does not
-    have is the one that decides it: **distance from the subject**. Ink
-    overlap still vetoes, corners are still preferred, and between two
-    clear corners the far one wins.
-    """
-    W, H = occ.w, occ.h
-    fx, fy = focus
-    reach = math.hypot(W, H)
-    xs = [margin + i * max(0.0, W - 2 * margin - bw) / 8.0 for i in range(9)]
-    ys = [margin + i * max(0.0, H - 2 * margin - bh) / 10.0 for i in range(11)]
-    best, best_score = (margin, margin), None
-    for y in ys:
-        for x in xs:
-            ov = occ.overlap(x, y, x + bw, y + bh, margin * 0.8)
-            cx, cy = x + bw * 0.5, y + bh * 0.5
-            corner = min(math.hypot(cx - ex, cy - ey)
-                         for ex in (0.0, W) for ey in (0.0, H))
-            far = math.hypot(cx - fx, cy - fy) / reach
-            score = ov * 90.0 + corner * 1.5 - far * reach * 0.62
-            if best_score is None or score < best_score:
-                best, best_score = (x, y), score
-    return best
-
-
 def inscribe(cv, rng, occ, S, title, focus=None):
     """Measure the block, then let the 留白 decide where it goes."""
     W, H = cv.w, cv.h
@@ -3369,25 +3331,19 @@ def inscribe(cv, rng, occ, S, title, focus=None):
     margin = S * 0.040
     r0 = min(W, H) * 0.15
     for fy in (0.34, 0.52, 0.70):
-        occ.add(W * 0.5, H * fy, r0)
+        occ.add(W * 0.5, H * fy, r0, ink=False)
+    block = None
     if bw < W - 2 * margin and bh < H - 2 * margin:
-        bx, by = (_place_block(occ, bw, bh, margin, focus) if focus
-                  else occ.place(bw, bh, margin, corner_bias=1.5))
+        bx, by = occ.place(bw, bh, margin, corner_bias=1.5, focus=focus)
         paint_column(cv, rng, FONT, title, bx + gap + ss, by, gs, lead=lead)
         end = paint_column(cv, rng, FONT, sign, bx, by + sign_dy, ss,
                            lead=lead_s, alpha=(0.60, 0.84))
         paint_seal(cv, rng, FONT, SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
                    bx + (ss - seal_s) * 0.5, end + gs * 0.2, seal_s)
         occ.add(bx + bw * 0.5, by + bh * 0.5, max(bw, bh) * 0.55)
-    if rng.random() < 0.5:                        # 压角章
-        s2 = S * rng.uniform(0.036, 0.050)
-        for cx, cy in ((W * 0.07, H * 0.88), (W * 0.88 - s2, H * 0.88),
-                       (W * 0.07, H * 0.07), (W * 0.88 - s2, H * 0.07)):
-            if occ.overlap(cx, cy, cx + s2, cy + s2, s2 * 0.5) == 0.0:
-                paint_seal(cv, rng, FONT,
-                           SEAL_WORDS[rng.randrange(len(SEAL_WORDS))],
-                           cx, cy, s2)
-                break
+        block = (bx, by, bw, bh)
+    if rng.random() < 0.5:                        # 压角章 — set against the 款
+        gb.corner_seal(cv, rng, FONT, SEAL_WORDS, occ, S, block)
 
 
 # --------------------------------------------------------------------------
