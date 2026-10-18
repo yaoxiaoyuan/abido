@@ -1635,13 +1635,61 @@ def compose(cv, rng, scene_key, plan_key, style_key, cun_key):
     if rng.random() < sc["cliff"]:
         hgt = H * rng.uniform(0.30, 0.46)
         base = ty - r * rng.uniform(0.1, 0.6)
-        rockmass(cv, rng, "mid", W * rng.uniform(0.40, 0.78), hgt, base,
-                 W * mx(rng.uniform(0.62, 0.95)), near3, far3, grain, mode,
-                 per, amp, scrub, bow, scale, ink_d, H, peaks=(1, 2),
-                 spire=(0.62, 1.30), fade=hgt * 0.18)
-        if rng.random() < sc["fall"]:
-            fx = W * mx(rng.uniform(0.66, 0.90))
-            y_top = base - hgt * rng.uniform(0.3, 0.6)
+        R = rockmass(cv, rng, "mid", W * rng.uniform(0.40, 0.78), hgt, base,
+                     W * mx(rng.uniform(0.62, 0.95)), near3, far3, grain, mode,
+                     per, amp, scrub, bow, scale, ink_d, H, peaks=(1, 2),
+                     spire=(0.62, 1.30), fade=hgt * 0.18)
+        # 瀑布 hangs in a *notch* of the cliff it falls down, and until now
+        # this module did not look at the cliff at all:
+        #
+        #     fx    = W * mx(rng.uniform(0.66, 0.90))
+        #     y_top = base - hgt * rng.uniform(0.3, 0.6)
+        #
+        # Two independent uniforms, neither of them consulting the crest that
+        # `rockmass` had just built and handed back — the return value was
+        # thrown away. `hgt` is the mass's *nominal* height; the crest only
+        # reaches it at the summit, and `fade` plus `ridge`'s own breaks and
+        # spires pull it hundreds of pixels lower on the flanks. So the top of
+        # the fall was set from a number the rock does not keep: a quarter of
+        # the falls drawn (3 of 12 over sixty seeds) began three to four per
+        # cent of the sheet *above* the skyline, a pale bar hanging in open
+        # paper with the ridge crossing it halfway down. The same arithmetic
+        # also let `fx` miss the mass sideways (the band and the cliff's span
+        # need not intersect) and let a fall be drawn after `rockmass`
+        # returned `None` — a waterfall down a cliff that was never built.
+        #
+        # Sited the way shanshui sites its own (shanshui.py §瀑): score each
+        # interior column by how far the crest climbs on *both* sides of it,
+        # which finds a dip with rock standing either side rather than the
+        # skirt at the end of the mass, and start the fall just under that
+        # column's crest. On the rock by construction, at whatever height the
+        # rock actually turned out to be.
+        # Every name below is `w_`-prefixed on purpose. `paint` is one long
+        # function and its locals are the painting: the first draft of this
+        # search called its column count `n`, which two hundred lines further
+        # down is the number of sides of the 亭 — so a quarter of the sheets
+        # came out with a two-hundred-gon pavilion, which is a filled black
+        # disc. Caught by counting near-black pixels before and after (0 of 60
+        # sheets over 4.5 % black, against 15 of 60), not by reading.
+        if R is not None and rng.random() < sc["fall"]:
+            w_n = len(R.top) - 1
+            w_d = max(3, int(w_n * 0.07))
+            w_j, w_gy, w_best = None, None, max(2.0, H * 0.004)
+            for w_i in range(w_d, w_n - w_d):
+                w_px = R.x0 + w_i
+                if (w_px < W * 0.10 or w_px > W * 0.90
+                        or abs(w_px - tx) < r * 1.2):
+                    continue
+                w_t = R.top[w_i]
+                w_a, w_b = w_t - R.top[w_i - w_d], w_t - R.top[w_i + w_d]
+                w_v = w_a if w_a < w_b else w_b
+                if w_v > w_best:
+                    w_best, w_gy, w_j = w_v, w_t, w_i
+        else:
+            w_j = None
+        if w_j is not None:
+            fx = R.x0 + w_j
+            y_top = w_gy + hgt * rng.uniform(0.10, 0.26)
             # 瀑入云 — and it ends *in* the mist, not three per cent of the
             # sheet below the cliff's foot.
             #
