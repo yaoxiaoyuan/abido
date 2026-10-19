@@ -48,6 +48,8 @@ import grape
 import crab
 import mei
 import bird
+import song
+import vase
 
 # name -> (module, 画科, the module's own default sheet)
 PAINTERS = {
@@ -61,6 +63,8 @@ PAINTERS = {
     "crab":     (crab,     "虾蟹",     (900, 1200)),
     "mei":      (mei,      "墨梅",     (900, 1300)),
     "bird":     (bird,     "翎毛",     (900, 1300)),
+    "song":     (song,     "松石",     (900, 1300)),
+    "vase":     (vase,     "瓶花",     (900, 1300)),
 }
 
 
@@ -351,7 +355,8 @@ def main(argv=None):
     ap.add_argument("-s", "--seed", type=int, default=None)
     ap.add_argument("-p", "--painter", default=None,
                     help="gongbi | shanshui | bamboo | fish | pavilion"
-                         " | orchid | grape | crab | mei | bird")
+                         " | orchid | grape | crab | mei | bird | song"
+                         " | vase")
     ap.add_argument("--size", default=None, help="WxH, e.g. 900x1200")
     ap.add_argument("--cols", type=int, default=4,
                     help="leaves per row on the 册页 summary (default 4)")
